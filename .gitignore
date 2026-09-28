@@ -1,0 +1,6 @@
+.env
+clicky-env/
+.commandcode/
+.pytest_cache/
+__pycache__/
+resume-with.txt

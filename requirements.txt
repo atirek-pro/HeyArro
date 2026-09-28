@@ -1,0 +1,8 @@
+PySide6
+keyboard
+sounddevice
+faster-whisper
+mss
+google-genai
+python-dotenv
+pytest
