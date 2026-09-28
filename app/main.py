@@ -12,21 +12,33 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from app.audio.recorder import RECORDINGS_DIR, Recorder
 from app.capture import create_screen_capture_provider
-from app.config import LLM_PROVIDER, SCREENSHOT_DIR, TRANSCRIPT_DISPLAY_MS
+from app.config import (
+    DEBUG_RESPONSE_CAPTION,
+    LLM_PROVIDER,
+    SCREENSHOT_DIR,
+    TEACHING_ENABLED,
+    TRANSCRIPT_DISPLAY_MS,
+    TTS_PROVIDER,
+    VISUAL_GROUNDING_ENABLED,
+)
 from app.coordinator import ApplicationCoordinator
 from app.hotkey.global_hotkey import GlobalHotkey
 from app.llm import UnsupportedProviderError, get_llm_provider
 from app.state import ApplicationState
+from app.teaching import create_visual_teaching_service
 from app.transcription import create_transcription_provider
+from app.tts import UnsupportedTTSProviderError, get_tts_provider
 from app.ui.caption import Caption
 from app.ui.companion import Companion
 from app.ui.indicator import Indicator
 from app.ui.tray import Tray
+from app.visual_grounding import create_visual_grounder
 
 logger = logging.getLogger(__name__)
 
 
-def _status_text(coordinator, transcription, capture, llm):
+def _status_text(coordinator, transcription, capture, llm, tts, teaching, grounder):
+    grounding = type(grounder).__name__ if grounder is not None else "off"
     return (
         "Clicky Assistant is running in the background.\n\n"
         "Global hotkey: Ctrl + Alt\n"
@@ -34,8 +46,12 @@ def _status_text(coordinator, transcription, capture, llm):
         f"Transcription: {type(transcription).__name__}\n"
         f"Screen capture: {type(capture).__name__}\n"
         f"Response: {type(llm).__name__}\n"
-        f"Provider: {LLM_PROVIDER} (model: {getattr(llm, 'model', 'n/a')})\n\n"
-        "Hold Ctrl + Alt to record, transcribe, capture and respond."
+        f"Provider: {LLM_PROVIDER} (model: {getattr(llm, 'model', 'n/a')})\n"
+        f"Voice output: {type(tts).__name__} (TTS_PROVIDER={TTS_PROVIDER})\n"
+        f"Visual teaching: {type(teaching).__name__} (TEACHING_ENABLED={TEACHING_ENABLED})\n"
+        f"Target refinement: {grounding} "
+        f"(VISUAL_GROUNDING_ENABLED={VISUAL_GROUNDING_ENABLED})\n\n"
+        "Hold Ctrl + Alt to record, transcribe, capture, answer and point."
     )
 
 
@@ -47,6 +63,16 @@ def _select_llm_provider():
         logger.error("%s", exc)
         logger.error("Falling back to the mock provider so the application keeps running")
         return get_llm_provider("mock")
+
+
+def _select_tts_provider():
+    """Build the configured voice provider, staying silent-but-alive if unknown."""
+    try:
+        return get_tts_provider()
+    except UnsupportedTTSProviderError as exc:
+        logger.error("%s", exc)
+        logger.error("Falling back to the mock TTS provider so the application keeps running")
+        return get_tts_provider("mock")
 
 
 def main():
@@ -67,6 +93,9 @@ def main():
     transcription = create_transcription_provider()
     capture = create_screen_capture_provider()
     llm = _select_llm_provider()
+    tts = _select_tts_provider()
+    teaching = create_visual_teaching_service()
+    grounder = create_visual_grounder()
 
     coordinator = ApplicationCoordinator(
         hotkey=hotkey,
@@ -74,13 +103,16 @@ def main():
         transcription=transcription,
         capture=capture,
         llm=llm,
+        tts=tts,
+        teaching=teaching,
+        grounder=grounder,
     )
 
     tray = Tray(
         on_status=lambda: QMessageBox.information(
             None,
             "Clicky Assistant",
-            _status_text(coordinator, transcription, capture, llm),
+            _status_text(coordinator, transcription, capture, llm, tts, teaching, grounder),
         ),
         on_quit=app.quit,
     )
@@ -100,11 +132,16 @@ def main():
         tray.showMessage("Clicky Assistant", message, QSystemTrayIcon.Warning, 5000)
 
     def on_response(response):
-        caption.show_text(response.text)
+        # Development aid only: the normal flow shows the teaching overlay.
+        caption.show_text(response.response.text)
 
     coordinator.state_changed.connect(on_state_changed)
     coordinator.error_occurred.connect(on_error)
-    coordinator.response_ready.connect(on_response)
+    if DEBUG_RESPONSE_CAPTION:
+        logger.warning(
+            "DEBUG_RESPONSE_CAPTION is on - raw responses are shown in the caption"
+        )
+        coordinator.response_ready.connect(on_response)
 
     tray.show()
     companion.start()
@@ -121,6 +158,21 @@ def main():
         type(llm).__name__,
         LLM_PROVIDER,
         getattr(llm, "model", "n/a"),
+    )
+    logger.info(
+        "Voice output provider: %s (configured=%s)",
+        type(tts).__name__,
+        TTS_PROVIDER,
+    )
+    logger.info(
+        "Visual teaching: %s (configured=%s)",
+        type(teaching).__name__,
+        TEACHING_ENABLED,
+    )
+    logger.info(
+        "Visual grounding: %s (configured=%s)",
+        type(grounder).__name__ if grounder is not None else "off",
+        VISUAL_GROUNDING_ENABLED,
     )
     logger.info(
         "Clicky Assistant ready - hold Ctrl + Alt to record, transcribe, capture and respond "

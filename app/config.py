@@ -39,6 +39,14 @@ def _read(name, default=None, cast=str):
         return default
 
 
+def _read_flag(name, default=False):
+    """Read a boolean flag, treating "1/true/yes/on" (any case) as True."""
+    raw = os.environ.get(name) or os.environ.get(f"CLICKY_{name}")
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 # --- assistant behaviour ----------------------------------------------------
 
 # How long the transcript bubble stays on screen next to the cursor.
@@ -69,6 +77,53 @@ SCREENSHOT_DIR = (
     Path(_screenshot_dir)
     if _screenshot_dir
     else Path(tempfile.gettempdir()) / "clicky-screenshots"
+)
+
+# --- text to speech (voice output) ------------------------------------------
+
+# "windows" (local SAPI5 voice via pyttsx3), "mock" (records but stays silent),
+# "elevenlabs" (placeholder; reports "not implemented yet").
+TTS_PROVIDER = (_read("TTS_PROVIDER", "windows") or "windows").strip().lower()
+
+# Optional tuning for the Windows voice; None keeps the engine's own defaults.
+TTS_RATE_WPM = _read("TTS_RATE_WPM", None, int)
+TTS_VOLUME = _read("TTS_VOLUME", None, float)
+TTS_VOICE_ID = _read("TTS_VOICE_ID")
+
+# --- visual teaching overlay ------------------------------------------------
+
+# Draw Arro's pointer and target highlights on a transparent, click-through
+# overlay. Turn off to run headless or to fall back to voice-only answers.
+TEACHING_ENABLED = _read_flag("TEACHING_ENABLED", True)
+
+# Development aid only: show the raw response text in the cursor caption again.
+# The normal flow shows the teaching overlay instead.
+DEBUG_RESPONSE_CAPTION = _read_flag("DEBUG_RESPONSE_CAPTION", False)
+
+# --- visual grounding (target refinement) -----------------------------------
+
+# Refine each approximate target with a second, high-resolution vision pass.
+# Off means the first pass's coordinates are used exactly as they always were.
+VISUAL_GROUNDING_ENABLED = _read_flag("VISUAL_GROUNDING_ENABLED", True)
+
+# Context (in screenshot pixels) added around an approximate target before the
+# refinement crop is taken. The first pass may already be inaccurate, so the
+# crop deliberately includes surroundings.
+GROUNDING_CROP_PADDING = _read("GROUNDING_CROP_PADDING", 240, int)
+
+# A refinement is only accepted when the model is at least this confident;
+# otherwise the approximate target is kept.
+GROUNDING_CONFIDENCE_THRESHOLD = _read("GROUNDING_CONFIDENCE_THRESHOLD", 0.70, float)
+
+# Development aid: save the crop and annotated images for each refinement so the
+# first pass's guess can be compared with what refinement found.
+VISUAL_GROUNDING_DEBUG = _read_flag("VISUAL_GROUNDING_DEBUG", False)
+
+_grounding_dir = _read("GROUNDING_DEBUG_DIR")
+GROUNDING_DEBUG_DIR = (
+    Path(_grounding_dir)
+    if _grounding_dir
+    else Path(tempfile.gettempdir()) / "clicky-grounding"
 )
 
 # --- vision LLM provider ----------------------------------------------------

@@ -1,5 +1,5 @@
 .env
-clicky-env/
+heyarro-env/
 .commandcode/
 .pytest_cache/
 __pycache__/

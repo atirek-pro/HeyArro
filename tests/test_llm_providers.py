@@ -20,10 +20,18 @@ from app.llm.provider import (
     UnsupportedProviderError,
     VisionLLMProvider,
     VisionLLMRequest,
-    VisionLLMResponse,
     build_user_prompt,
     image_mime_type,
+    image_size,
     validate_screenshot,
+)
+from app.llm.response import (
+    HeyArroResponse,
+    ResponseContent,
+    ResponseTone,
+    TargetType,
+    TeachingMode,
+    TeachingPlan,
 )
 from app.llm.worker import LLMWorker
 
@@ -41,13 +49,24 @@ ALL_PROVIDERS = [
 # --- test doubles -----------------------------------------------------------
 
 
+def make_response(text="answer", tone="neutral", mode="direct", steps=None):
+    """Build a valid structured response the way Gemini would return one."""
+    return HeyArroResponse(
+        response=ResponseContent(text=text, tone=ResponseTone(tone)),
+        teaching=TeachingPlan(mode=TeachingMode(mode), steps=steps or []),
+    )
+
+
 class FakeResponse:
-    def __init__(self, text):
+    """A Gemini response carrying a structured payload."""
+
+    def __init__(self, text=None, parsed=None):
         self.text = text
+        self.parsed = parsed
 
 
 class MalformedResponse:
-    """No text and no candidates, like a truncated provider response."""
+    """No text, no parsed payload and no candidates, like a truncated response."""
 
 
 class FakeModels:
@@ -79,6 +98,11 @@ def gemini_parts(client):
     return client.models.calls[0]["contents"].parts
 
 
+def structured(text="ok", **kwargs):
+    """A fake Gemini response whose parsed payload is already structured."""
+    return FakeResponse(parsed=make_response(text=text, **kwargs))
+
+
 # --- abstraction ------------------------------------------------------------
 
 
@@ -95,18 +119,17 @@ def test_every_provider_implements_process(provider_class):
     assert provider.name
 
 
-def test_request_and_response_are_plain_data():
+def test_request_is_plain_data():
     request = VisionLLMRequest(transcript="hello", screenshot=PNG)
     assert request.transcript == "hello"
     assert request.screenshot == PNG
 
-    response = VisionLLMResponse(text="answer")
-    assert response.model is None
-    assert response.duration is None
-
 
 def test_request_screenshot_is_optional():
-    assert VisionLLMRequest("hello").screenshot is None
+    request = VisionLLMRequest("hello")
+
+    assert request.screenshot is None
+    assert request.screenshot_size is None
 
 
 # --- provider factory -------------------------------------------------------
@@ -161,7 +184,7 @@ def test_missing_provider_name_is_rejected(monkeypatch):
 
 
 def test_gemini_request_contains_the_transcript():
-    provider, client = gemini(FakeResponse("an editor with an error"))
+    provider, client = gemini(structured())
 
     provider.process(VisionLLMRequest(transcript="What is this error?", screenshot=PNG))
 
@@ -170,7 +193,7 @@ def test_gemini_request_contains_the_transcript():
 
 
 def test_gemini_request_contains_the_screenshot():
-    provider, client = gemini(FakeResponse("ok"))
+    provider, client = gemini(structured())
 
     provider.process(VisionLLMRequest(transcript="hello", screenshot=PNG))
 
@@ -181,15 +204,25 @@ def test_gemini_request_contains_the_screenshot():
 
 
 def test_gemini_sends_the_neutral_system_instruction():
-    provider, client = gemini(FakeResponse("ok"))
+    provider, client = gemini(structured())
 
     provider.process(VisionLLMRequest(transcript="hello", screenshot=PNG))
 
     assert client.models.calls[0]["config"].system_instruction == SYSTEM_INSTRUCTION
 
 
+def test_gemini_requests_structured_json_output():
+    provider, client = gemini(structured())
+
+    provider.process(VisionLLMRequest(transcript="hello", screenshot=PNG))
+
+    request_config = client.models.calls[0]["config"]
+    assert request_config.response_mime_type == "application/json"
+    assert request_config.response_schema is HeyArroResponse
+
+
 def test_gemini_uses_the_configured_model():
-    provider, client = gemini(FakeResponse("ok"), model="gemini-test-model")
+    provider, client = gemini(structured(), model="gemini-test-model")
 
     provider.process(VisionLLMRequest("hello", PNG))
 
@@ -197,7 +230,7 @@ def test_gemini_uses_the_configured_model():
 
 
 def test_gemini_missing_screenshot_sends_text_only():
-    provider, client = gemini(FakeResponse("ok"))
+    provider, client = gemini(structured())
 
     provider.process(VisionLLMRequest(transcript="hello", screenshot=None))
 
@@ -206,28 +239,93 @@ def test_gemini_missing_screenshot_sends_text_only():
     assert "hello" in texts
 
 
-# --- gemini: response -------------------------------------------------------
+def test_gemini_tells_the_model_the_screenshot_pixel_grid():
+    provider, client = gemini(structured())
+
+    provider.process(VisionLLMRequest("hi", png_bytes(1280, 720)))
+
+    texts = " ".join(part.text for part in gemini_parts(client) if getattr(part, "text", None))
+    assert "1280 by 720" in texts
 
 
-def test_gemini_response_is_converted_to_the_neutral_model():
-    provider, _client = gemini(FakeResponse("The screen shows an error dialog."))
+def test_gemini_prefers_the_size_carried_by_the_request():
+    provider, client = gemini(structured())
+
+    provider.process(
+        VisionLLMRequest("hi", png_bytes(1280, 720), screenshot_size=(800, 600))
+    )
+
+    texts = " ".join(part.text for part in gemini_parts(client) if getattr(part, "text", None))
+    assert "800 by 600" in texts
+    assert "1280 by 720" not in texts
+
+
+# --- gemini: structured response --------------------------------------------
+
+
+def test_gemini_converts_structured_output_into_hey_arro_response():
+    expected = make_response(text="The screen shows an error dialog.", mode="explanatory")
+    provider, _client = gemini(FakeResponse(parsed=expected))
 
     result = provider.process(VisionLLMRequest("what is this?", PNG))
 
-    assert isinstance(result, VisionLLMResponse)
-    assert result.text == "The screen shows an error dialog."
-    assert result.model == provider.model
-    assert result.duration is not None
+    assert isinstance(result, HeyArroResponse)
+    assert result.response.text == "The screen shows an error dialog."
+    assert result.teaching.mode is TeachingMode.EXPLANATORY
 
 
-def test_gemini_strips_whitespace_from_the_response():
-    provider, _client = gemini(FakeResponse("  padded answer  "))
-    assert provider.process(VisionLLMRequest("hi", PNG)).text == "padded answer"
+def test_gemini_validates_a_parsed_mapping():
+    provider, _client = gemini(
+        FakeResponse(
+            parsed={
+                "response": {"text": "Open Settings to fix this.", "tone": "instructional"},
+                "teaching": {
+                    "mode": "guided",
+                    "steps": [
+                        {
+                            "instruction": "Open Settings.",
+                            "visual_actions": [
+                                {
+                                    "type": "box",
+                                    "target": {
+                                        "x": 842,
+                                        "y": 316,
+                                        "width": 140,
+                                        "height": 48,
+                                        "label": "Settings",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                },
+            }
+        )
+    )
+
+    result = provider.process(VisionLLMRequest("where?", PNG))
+
+    assert result.response.tone is ResponseTone.INSTRUCTIONAL
+    assert result.teaching.mode is TeachingMode.GUIDED
+    action = result.teaching.steps[0].visual_actions[0]
+    assert action.target.x == 842
+    assert (action.target.width, action.target.height) == (140, 48)
+    assert action.target.type is TargetType.REGION
 
 
-def test_gemini_reads_text_from_candidates_when_text_is_absent():
+def test_gemini_validates_structured_json_text():
+    provider, _client = gemini(FakeResponse(text=make_response(text="a direct answer").model_dump_json()))
+
+    result = provider.process(VisionLLMRequest("hi", PNG))
+
+    assert result.response.text == "a direct answer"
+
+
+def test_gemini_reads_structured_text_from_candidates_when_parsed_is_absent():
+    payload = make_response(text="from candidates").model_dump_json()
+
     class Part:
-        text = "from candidates"
+        text = payload
 
     class Content:
         parts = [Part()]
@@ -236,14 +334,31 @@ def test_gemini_reads_text_from_candidates_when_text_is_absent():
         content = Content()
 
     class Response:
+        parsed = None
         candidates = [Candidate()]
 
     provider, _client = gemini(Response())
-    assert provider.process(VisionLLMRequest("hi", PNG)).text == "from candidates"
+    assert provider.process(VisionLLMRequest("hi", PNG)).response.text == "from candidates"
+
+
+def test_gemini_invalid_structured_output_is_reported():
+    provider, _client = gemini(
+        FakeResponse(parsed={"response": {"text": "hi", "tone": "furious"}, "teaching": {"mode": "direct"}})
+    )
+
+    with pytest.raises(LLMError):
+        provider.process(VisionLLMRequest("hi", PNG))
+
+
+def test_gemini_malformed_json_text_is_reported():
+    provider, _client = gemini(FakeResponse(text="not json at all"))
+
+    with pytest.raises(LLMError):
+        provider.process(VisionLLMRequest("hi", PNG))
 
 
 def test_gemini_empty_response_is_reported():
-    provider, _client = gemini(FakeResponse(""))
+    provider, _client = gemini(FakeResponse(text=""))
     with pytest.raises(LLMError):
         provider.process(VisionLLMRequest("hi", PNG))
 
@@ -281,7 +396,7 @@ def test_gemini_missing_api_key_is_reported():
 
 
 def test_gemini_rejects_an_invalid_screenshot_before_calling_the_api():
-    provider, client = gemini(FakeResponse("ok"))
+    provider, client = gemini(structured())
 
     with pytest.raises(LLMError):
         provider.process(VisionLLMRequest("hi", b"this is not an image"))
@@ -290,7 +405,7 @@ def test_gemini_rejects_an_invalid_screenshot_before_calling_the_api():
 
 
 def test_gemini_rejects_an_oversized_screenshot_before_calling_the_api():
-    provider, client = gemini(FakeResponse("ok"))
+    provider, client = gemini(structured())
 
     with pytest.raises(LLMError):
         provider.process(VisionLLMRequest("hi", PNG + b"\x00" * config.MAX_SCREENSHOT_BYTES))
@@ -329,6 +444,31 @@ def test_validate_screenshot_rejects_oversized_images():
         validate_screenshot(PNG, max_bytes=8)
 
 
+def png_bytes(width, height):
+    """A minimal PNG whose IHDR carries a real pixel size."""
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + (13).to_bytes(4, "big")
+        + b"IHDR"
+        + width.to_bytes(4, "big")
+        + height.to_bytes(4, "big")
+        + b"\x08\x06\x00\x00\x00"
+        + b"\x00" * 8
+    )
+
+
+def test_image_size_reads_png_dimensions():
+    assert image_size(png_bytes(1280, 720)) == (1280, 720)
+
+
+def test_image_size_is_none_when_unknown():
+    assert image_size(None) is None
+    assert image_size(b"") is None
+    assert image_size(b"not an image") is None
+    assert image_size(JPEG) is None
+    assert image_size(PNG) is None  # zeroed header: no usable size
+
+
 # --- prompt -----------------------------------------------------------------
 
 
@@ -338,12 +478,31 @@ def test_system_instruction_is_provider_neutral_and_guards_against_invention():
     assert not any(vendor in SYSTEM_INSTRUCTION.lower() for vendor in ("gemini", "openai", "claude"))
 
 
+def test_system_instruction_describes_the_teaching_modes():
+    lowered = SYSTEM_INSTRUCTION.lower()
+    assert "direct" in lowered
+    assert "guided" in lowered
+    assert "explanatory" in lowered
+
+
 def test_user_prompt_carries_the_question():
     assert "What is this error?" in build_user_prompt("What is this error?", True)
 
 
 def test_user_prompt_asks_for_a_transcript_only_answer_without_a_screenshot():
     assert "No screenshot" in build_user_prompt("hello", False)
+
+
+def test_user_prompt_states_the_screenshot_pixel_size():
+    prompt = build_user_prompt("explain this", True, (1280, 720))
+
+    assert "1280 by 720" in prompt
+    assert "1279" in prompt and "719" in prompt
+    assert "0-1000" in prompt  # normalised coordinates are explicitly ruled out
+
+
+def test_user_prompt_omits_the_size_when_it_is_unknown():
+    assert "pixels" not in build_user_prompt("explain this", True)
 
 
 # --- placeholders -----------------------------------------------------------
@@ -372,18 +531,20 @@ def test_placeholders_also_raise_plain_not_implemented_error(provider_class):
 # --- mock -------------------------------------------------------------------
 
 
-def test_mock_returns_a_neutral_response():
+def test_mock_returns_a_structured_response():
     result = MockVisionLLMProvider(delay_seconds=0).process(VisionLLMRequest("hello", PNG))
 
-    assert isinstance(result, VisionLLMResponse)
-    assert "hello" in result.text
-    assert str(len(PNG)) in result.text
+    assert isinstance(result, HeyArroResponse)
+    assert "hello" in result.response.text
+    assert str(len(PNG)) in result.response.text
+    assert result.response.tone is ResponseTone.NEUTRAL
+    assert result.teaching.steps == []
 
 
 def test_mock_works_without_a_screenshot():
     result = MockVisionLLMProvider(delay_seconds=0).process(VisionLLMRequest("hello"))
 
-    assert "no screenshot" in result.text
+    assert "no screenshot" in result.response.text
 
 
 # --- worker -----------------------------------------------------------------
@@ -398,7 +559,7 @@ def test_worker_forwards_the_request_and_emits_the_response():
 
         def process(self, request):
             self.seen.append(request)
-            return VisionLLMResponse(text="done")
+            return make_response(text="done")
 
     provider = RecordingProvider()
     worker = LLMWorker(provider, VisionLLMRequest("hi", PNG))
@@ -409,7 +570,7 @@ def test_worker_forwards_the_request_and_emits_the_response():
 
     assert provider.seen[0].transcript == "hi"
     assert provider.seen[0].screenshot == PNG
-    assert [response.text for response in finished] == ["done"]
+    assert [response.response.text for response in finished] == ["done"]
 
 
 def test_worker_reports_provider_failures_without_raising():
