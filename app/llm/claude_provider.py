@@ -8,8 +8,8 @@ from app.llm.provider import (
     ProviderNotImplementedError,
     VisionLLMProvider,
     VisionLLMRequest,
-    VisionLLMResponse,
 )
+from app.llm.response import HeyArroResponse
 
 
 class ClaudeVisionProvider(VisionLLMProvider):
@@ -17,7 +17,7 @@ class ClaudeVisionProvider(VisionLLMProvider):
 
     name = "claude"
 
-    def process(self, request: VisionLLMRequest) -> VisionLLMResponse:
+    def process(self, request: VisionLLMRequest) -> HeyArroResponse:
         raise ProviderNotImplementedError(
             "The Claude vision provider is not implemented yet; "
             "set LLM_PROVIDER to gemini or mock."
