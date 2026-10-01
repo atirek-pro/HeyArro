@@ -8,13 +8,8 @@ an advanced-sounding topic on its own changes nothing.
 
 The level comes from the words of the request itself and nothing else, which
 means it costs no extra model call: the wording is matched locally and the result
-is handed to the prompts that already exist. When the request says nothing about
+is handed to the prompt that already exists. When the request says nothing about
 depth, the level is the neutral middle one.
-
-Sibling modules
----------------
-``app.teaching.followup`` uses :func:`adjust_difficulty` when the learner asks
-for a simpler or deeper explanation of the same material.
 """
 
 import re
@@ -30,14 +25,6 @@ class TeachingDifficulty(str, Enum):
 
 
 DEFAULT_DIFFICULTY = TeachingDifficulty.INTERMEDIATE
-
-# From easiest to hardest, which is also the order :func:`adjust_difficulty`
-# walks. There are deliberately only three levels.
-_LEVELS = (
-    TeachingDifficulty.BEGINNER,
-    TeachingDifficulty.INTERMEDIATE,
-    TeachingDifficulty.ADVANCED,
-)
 
 # An explicit refusal to simplify is the one instruction that beats a request for
 # simplicity, so it is checked before anything else ("don't oversimplify").
@@ -143,32 +130,16 @@ def detect_difficulty(request, default=DEFAULT_DIFFICULTY):
 def difficulty_guidance(difficulty):
     """Return the teaching instruction for ``difficulty``, written for a prompt.
 
-    This is the single source of how each level is taught, so every prompt that
-    needs it says the same thing.
+    This is the single source of how each level is answered, so the prompt and
+    the tests say the same thing.
     """
     level = difficulty or DEFAULT_DIFFICULTY
     return _GUIDANCE.get(level, _GUIDANCE[DEFAULT_DIFFICULTY])
 
 
-def adjust_difficulty(difficulty, steps):
-    """Return ``difficulty`` moved ``steps`` levels, staying inside the range.
-
-    Moving one level at a time keeps adaptation bounded: asking for a simpler
-    explanation goes down a level, never straight to the floor.
-    """
-    try:
-        index = _LEVELS.index(difficulty)
-    except ValueError:
-        index = _LEVELS.index(DEFAULT_DIFFICULTY)
-
-    moved = min(max(index + int(steps), 0), len(_LEVELS) - 1)
-    return _LEVELS[moved]
-
-
 __all__ = [
     "DEFAULT_DIFFICULTY",
     "TeachingDifficulty",
-    "adjust_difficulty",
     "detect_difficulty",
     "difficulty_guidance",
 ]

@@ -1,4 +1,4 @@
-"""Gemini vision provider - the first real VisionLLMProvider implementation.
+"""Gemini vision provider - the real VisionLLMProvider implementation.
 
 Everything Gemini-specific lives here: the SDK import, the request payload, the
 structured-output schema and the response decoding. Nothing outside this module
@@ -10,6 +10,9 @@ import time
 
 from pydantic import ValidationError
 
+from google import genai
+from google.genai import types
+
 from app import config
 from app.llm.provider import (
     LLMError,
@@ -18,7 +21,6 @@ from app.llm.provider import (
     VisionLLMProvider,
     VisionLLMRequest,
     build_user_prompt,
-    image_size,
     validate_screenshot,
 )
 from app.llm.response import HeyArroResponse
@@ -88,30 +90,49 @@ class GeminiVisionProvider(VisionLLMProvider):
         self._timeout_seconds = (
             config.GEMINI_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
         )
-        self._client = client
-        self._sdk = None
+        # An injected client is used as-is - tests hand in a fake SDK, and a
+        # caller may manage its own connection; otherwise the SDK client is
+        # built once, here.
+        self._client = client if client is not None else self._build_client()
 
-        if self._client is None and not self._api_key:
+        if not self._api_key and client is None:
             logger.warning(
                 "GEMINI_API_KEY is not set; the Gemini provider will fail until it is configured"
             )
+
+    def _build_client(self):
+        """Build the SDK client with the configured timeout, if there is a key.
+
+        A missing key is reported when a request is made, not here, so an
+        unconfigured provider can still be constructed and warned about instead
+        of taking the application down at startup.
+        """
+        if not self._api_key:
+            return None
+
+        return genai.Client(
+            api_key=self._api_key,
+            http_options=types.HttpOptions(timeout=int(self._timeout_seconds * 1000)),
+        )
+
+    def _client_or_raise(self):
+        """Return the SDK client, or explain that no key is configured."""
+        if self._client is None:
+            raise ProviderConfigurationError(
+                "GEMINI_API_KEY is not set; add it to .env or the environment"
+            )
+        return self._client
 
     @property
     def model(self):
         return self._model
 
     def process(self, request: VisionLLMRequest) -> HeyArroResponse:
-        # Validated before the client is built, so a bad screenshot never
-        # reaches the API.
+        # Validated before anything is sent, so a bad screenshot never reaches
+        # the API.
         mime_type = validate_screenshot(request.screenshot)
 
-        client = self._get_client()
-        types = self._import_sdk()[1]
-
-        # The model can only place a visual target correctly if it is told the
-        # screenshot's own pixel grid; fall back to the PNG header if the caller
-        # did not supply it.
-        screenshot_size = request.screenshot_size or image_size(request.screenshot)
+        client = self._client_or_raise()
 
         parts = []
         if mime_type is not None:
@@ -121,7 +142,6 @@ class GeminiVisionProvider(VisionLLMProvider):
                 text=build_user_prompt(
                     request.transcript,
                     mime_type is not None,
-                    screenshot_size,
                     request.guidance,
                 )
             )
@@ -147,109 +167,12 @@ class GeminiVisionProvider(VisionLLMProvider):
 
         duration = round(time.perf_counter() - started, 3)
         logger.info(
-            "Gemini responded in %ss using model %s (mode=%s, steps=%s)",
+            "Gemini responded in %ss using model %s (tone=%s, %s characters)",
             duration,
             self._model,
-            result.teaching.mode.value,
-            len(result.teaching.steps),
+            result.response.tone.value,
+            len(result.response.text),
         )
 
         return result
 
-    def _import_sdk(self):
-        if self._sdk is None:
-            try:
-                from google import genai
-                from google.genai import types
-            except Exception as exc:
-                raise ProviderConfigurationError(f"google-genai is not available: {exc}") from exc
-            self._sdk = (genai, types)
-        return self._sdk
-
-    # --- teaching plan generation -------------------------------------------
-
-    def generate_teaching_plan(
-        self, user_query, screenshot=None, screenshot_size=None, context=None, guidance=None
-    ) -> "TeachingPlan":
-        """Ask Gemini how to teach ``user_query``, given the screenshot.
-
-        This is the teaching-plan generator: it decides *what* to teach and in
-        what order, not where things are on screen. The visual targets it
-        produces are approximate on purpose - the grounding pipeline refines
-        them later - and it reuses this provider's client, model and
-        structured-output mechanism rather than building its own.
-
-        Returns a validated ``TeachingPlan``, or raises LLMError.
-        """
-        # Imported here so this module does not pull the teaching package in at
-        # import time.
-        from app.teaching.plan import TeachingPlan
-        from app.teaching.plan_prompt import (
-            TEACHING_PLAN_SYSTEM_INSTRUCTION,
-            build_teaching_plan_prompt,
-        )
-
-        # Validated before the client is built, so a bad screenshot never
-        # reaches the API.
-        mime_type = validate_screenshot(screenshot)
-        size = screenshot_size or image_size(screenshot)
-
-        client = self._get_client()
-        types = self._import_sdk()[1]
-
-        parts = []
-        if mime_type is not None:
-            parts.append(types.Part.from_bytes(data=screenshot, mime_type=mime_type))
-        parts.append(
-            types.Part.from_text(
-                text=build_teaching_plan_prompt(
-                    user_query, mime_type is not None, size, context, guidance
-                )
-            )
-        )
-
-        logger.info("[TeachingPlan] Generation started")
-        logger.info("[TeachingPlan] Request received (%s characters)", len((user_query or "").strip()))
-        started = time.perf_counter()
-        try:
-            response = client.models.generate_content(
-                model=self._model,
-                contents=types.Content(role="user", parts=parts),
-                config=types.GenerateContentConfig(
-                    system_instruction=TEACHING_PLAN_SYSTEM_INSTRUCTION,
-                    response_mime_type="application/json",
-                    response_schema=TeachingPlan,
-                ),
-            )
-        except LLMError:
-            raise
-        except Exception as exc:
-            raise LLMError(f"Teaching plan request failed: {exc}") from exc
-
-        plan = _decode_structured(response, TeachingPlan, "teaching plan")
-        logger.info("[TeachingPlan] Teaching plan generated: %s step(s)", len(plan.steps))
-        logger.info("[TeachingPlan] Generation completed in %.1fs", time.perf_counter() - started)
-        return plan
-
-    def _get_client(self):
-        if self._client is not None:
-            return self._client
-
-        if not self._api_key:
-            raise ProviderConfigurationError(
-                "GEMINI_API_KEY is not set; set it or select another provider with LLM_PROVIDER"
-            )
-
-        genai, types = self._import_sdk()
-        try:
-            self._client = genai.Client(
-                api_key=self._api_key,
-                http_options=types.HttpOptions(timeout=int(self._timeout_seconds * 1000)),
-            )
-        except Exception as exc:
-            raise ProviderConfigurationError(f"Could not create the Gemini client: {exc}") from exc
-
-        logger.info(
-            "Gemini client ready (model=%s, timeout=%ss)", self._model, self._timeout_seconds
-        )
-        return self._client

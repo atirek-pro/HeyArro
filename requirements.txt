@@ -4,6 +4,5 @@ sounddevice
 faster-whisper
 mss
 google-genai
-pyttsx3
 python-dotenv
 pytest

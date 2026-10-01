@@ -10,17 +10,12 @@ import inspect
 
 import pytest
 
-from app.llm.provider import VisionLLMRequest, build_user_prompt
+from app.llm.provider import SYSTEM_INSTRUCTION, VisionLLMRequest, build_user_prompt
 from app.teaching.difficulty import (
     DEFAULT_DIFFICULTY,
     TeachingDifficulty,
-    adjust_difficulty,
     detect_difficulty,
     difficulty_guidance,
-)
-from app.teaching.plan_prompt import (
-    TEACHING_PLAN_SYSTEM_INSTRUCTION,
-    build_teaching_plan_prompt,
 )
 
 # --- the levels -------------------------------------------------------------
@@ -169,44 +164,13 @@ def test_a_missing_level_falls_back_to_the_intermediate_guidance():
     assert difficulty_guidance(None) == difficulty_guidance(TeachingDifficulty.INTERMEDIATE)
 
 
-# --- moving one level -------------------------------------------------------
-
-
-def test_adjusting_a_level_moves_exactly_one_step():
-    assert adjust_difficulty(TeachingDifficulty.INTERMEDIATE, -1) is TeachingDifficulty.BEGINNER
-    assert adjust_difficulty(TeachingDifficulty.INTERMEDIATE, 1) is TeachingDifficulty.ADVANCED
-
-
-def test_adjusting_a_level_never_leaves_the_range():
-    assert adjust_difficulty(TeachingDifficulty.BEGINNER, -1) is TeachingDifficulty.BEGINNER
-    assert adjust_difficulty(TeachingDifficulty.ADVANCED, 1) is TeachingDifficulty.ADVANCED
-    assert adjust_difficulty(TeachingDifficulty.BEGINNER, 10) is TeachingDifficulty.ADVANCED
-
-
-def test_an_unknown_level_is_treated_as_the_default():
-    assert adjust_difficulty(None, 0) is TeachingDifficulty.INTERMEDIATE
-
-
 # --- the prompts receive it -------------------------------------------------
 
 
-def test_the_plan_prompt_carries_the_guidance():
-    prompt = build_teaching_plan_prompt(
-        "explain this", True, (1280, 720), guidance=difficulty_guidance(TeachingDifficulty.BEGINNER)
-    )
-
-    assert "How to teach this request:" in prompt
-    assert "plain language" in prompt
-
-
-def test_the_plan_prompt_has_no_guidance_block_by_default():
-    assert "How to teach this request:" not in build_teaching_plan_prompt("explain this", True)
-
-
 def test_the_vision_prompt_carries_the_guidance():
-    prompt = build_user_prompt("what is this?", True, None, "Teach it plainly.")
+    prompt = build_user_prompt("what is this?", True, "Teach it plainly.")
 
-    assert "How to teach this:" in prompt
+    assert "How to answer it:" in prompt
     assert "Teach it plainly." in prompt
 
 
@@ -218,16 +182,8 @@ def test_the_request_carries_the_guidance_to_the_provider():
     assert VisionLLMRequest(transcript="what is this?").guidance == ""
 
 
-def test_the_teaching_prompt_tells_the_model_the_level_is_never_about_the_person():
-    lowered = TEACHING_PLAN_SYSTEM_INSTRUCTION.lower()
+def test_the_system_prompt_tells_the_model_the_level_is_never_about_the_person():
+    lowered = SYSTEM_INSTRUCTION.lower()
 
-    assert "how deeply to teach" in lowered
-    assert "never a judgement about the learner" in lowered
-    assert "technical question" in lowered
-
-
-def test_the_teaching_prompt_knows_about_continuing_a_lesson():
-    lowered = TEACHING_PLAN_SYSTEM_INSTRUCTION.lower()
-
-    assert "continuing a lesson" in lowered
-    assert "step 2" in lowered
+    assert "the depth the request asks for" in lowered
+    assert "not an instruction to assume an expert" in lowered

@@ -22,17 +22,9 @@ from app.llm.provider import (
     VisionLLMRequest,
     build_user_prompt,
     image_mime_type,
-    image_size,
     validate_screenshot,
 )
-from app.llm.response import (
-    HeyArroResponse,
-    ResponseContent,
-    ResponseTone,
-    TargetType,
-    TeachingMode,
-    TeachingPlan,
-)
+from app.llm.response import HeyArroResponse, ResponseContent, ResponseTone
 from app.llm.worker import LLMWorker
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
@@ -49,12 +41,9 @@ ALL_PROVIDERS = [
 # --- test doubles -----------------------------------------------------------
 
 
-def make_response(text="answer", tone="neutral", mode="direct", steps=None):
-    """Build a valid structured response the way Gemini would return one."""
-    return HeyArroResponse(
-        response=ResponseContent(text=text, tone=ResponseTone(tone)),
-        teaching=TeachingPlan(mode=TeachingMode(mode), steps=steps or []),
-    )
+def make_response(text="answer", tone="neutral"):
+    """Build a valid structured answer the way a provider would return one."""
+    return HeyArroResponse(response=ResponseContent(text=text, tone=ResponseTone(tone)))
 
 
 class FakeResponse:
@@ -129,7 +118,7 @@ def test_request_screenshot_is_optional():
     request = VisionLLMRequest("hello")
 
     assert request.screenshot is None
-    assert request.screenshot_size is None
+    assert request.guidance == ""
 
 
 # --- provider factory -------------------------------------------------------
@@ -239,78 +228,52 @@ def test_gemini_missing_screenshot_sends_text_only():
     assert "hello" in texts
 
 
-def test_gemini_tells_the_model_the_screenshot_pixel_grid():
-    provider, client = gemini(structured())
-
-    provider.process(VisionLLMRequest("hi", png_bytes(1280, 720)))
-
-    texts = " ".join(part.text for part in gemini_parts(client) if getattr(part, "text", None))
-    assert "1280 by 720" in texts
-
-
-def test_gemini_prefers_the_size_carried_by_the_request():
+def test_gemini_sends_the_guidance_with_the_question():
     provider, client = gemini(structured())
 
     provider.process(
-        VisionLLMRequest("hi", png_bytes(1280, 720), screenshot_size=(800, 600))
+        VisionLLMRequest("hi", png_bytes(1280, 720), guidance="Answer it plainly.")
     )
 
     texts = " ".join(part.text for part in gemini_parts(client) if getattr(part, "text", None))
-    assert "800 by 600" in texts
-    assert "1280 by 720" not in texts
+    assert "How to answer it:" in texts
+    assert "Answer it plainly." in texts
 
 
 # --- gemini: structured response --------------------------------------------
 
 
 def test_gemini_converts_structured_output_into_hey_arro_response():
-    expected = make_response(text="The screen shows an error dialog.", mode="explanatory")
+    expected = make_response(text="The screen shows an error dialog.")
     provider, _client = gemini(FakeResponse(parsed=expected))
 
     result = provider.process(VisionLLMRequest("what is this?", PNG))
 
     assert isinstance(result, HeyArroResponse)
     assert result.response.text == "The screen shows an error dialog."
-    assert result.teaching.mode is TeachingMode.EXPLANATORY
 
 
 def test_gemini_validates_a_parsed_mapping():
     provider, _client = gemini(
         FakeResponse(
             parsed={
-                "response": {"text": "Open Settings to fix this.", "tone": "instructional"},
-                "teaching": {
-                    "mode": "guided",
-                    "steps": [
-                        {
-                            "instruction": "Open Settings.",
-                            "visual_actions": [
-                                {
-                                    "type": "box",
-                                    "target": {
-                                        "x": 842,
-                                        "y": 316,
-                                        "width": 140,
-                                        "height": 48,
-                                        "label": "Settings",
-                                    },
-                                }
-                            ],
-                        }
-                    ],
-                },
+                "response": {"text": "Open Settings to fix this.", "tone": "instructional"}
             }
         )
     )
 
     result = provider.process(VisionLLMRequest("where?", PNG))
 
+    assert result.response.text == "Open Settings to fix this."
     assert result.response.tone is ResponseTone.INSTRUCTIONAL
-    assert result.teaching.mode is TeachingMode.GUIDED
-    action = result.teaching.steps[0].visual_actions[0]
-    assert action.target.x == 842
-    assert (action.target.width, action.target.height) == (140, 48)
-    assert action.target.type is TargetType.REGION
+
+
+def test_gemini_rejects_an_answer_with_no_text():
+    """An empty answer is an error, never a blank bubble on screen."""
+    provider, _client = gemini(FakeResponse(parsed={"response": {"text": "", "tone": "neutral"}}))
+
+    with pytest.raises(LLMError):
+        provider.process(VisionLLMRequest("hi", PNG))
 
 
 def test_gemini_validates_structured_json_text():
@@ -457,18 +420,6 @@ def png_bytes(width, height):
     )
 
 
-def test_image_size_reads_png_dimensions():
-    assert image_size(png_bytes(1280, 720)) == (1280, 720)
-
-
-def test_image_size_is_none_when_unknown():
-    assert image_size(None) is None
-    assert image_size(b"") is None
-    assert image_size(b"not an image") is None
-    assert image_size(JPEG) is None
-    assert image_size(PNG) is None  # zeroed header: no usable size
-
-
 # --- prompt -----------------------------------------------------------------
 
 
@@ -478,11 +429,12 @@ def test_system_instruction_is_provider_neutral_and_guards_against_invention():
     assert not any(vendor in SYSTEM_INSTRUCTION.lower() for vendor in ("gemini", "openai", "claude"))
 
 
-def test_system_instruction_describes_the_teaching_modes():
+def test_system_instruction_asks_for_the_whole_answer_in_words():
     lowered = SYSTEM_INSTRUCTION.lower()
-    assert "direct" in lowered
-    assert "guided" in lowered
-    assert "explanatory" in lowered
+
+    assert "response.text is the complete answer" in lowered
+    assert "no markdown" in lowered
+    assert "response.tone" in lowered
 
 
 def test_user_prompt_carries_the_question():
@@ -493,16 +445,13 @@ def test_user_prompt_asks_for_a_transcript_only_answer_without_a_screenshot():
     assert "No screenshot" in build_user_prompt("hello", False)
 
 
-def test_user_prompt_states_the_screenshot_pixel_size():
-    prompt = build_user_prompt("explain this", True, (1280, 720))
+def test_user_prompt_asks_about_the_screenshot():
+    prompt = build_user_prompt("explain this", True)
 
-    assert "1280 by 720" in prompt
-    assert "1279" in prompt and "719" in prompt
-    assert "0-1000" in prompt  # normalised coordinates are explicitly ruled out
-
-
-def test_user_prompt_omits_the_size_when_it_is_unknown():
-    assert "pixels" not in build_user_prompt("explain this", True)
+    assert "screenshot" in prompt.lower()
+    # Nothing about coordinates any more: the answer is words, not targets.
+    assert "pixels" not in prompt
+    assert "coordinates" not in prompt
 
 
 # --- placeholders -----------------------------------------------------------
@@ -538,7 +487,6 @@ def test_mock_returns_a_structured_response():
     assert "hello" in result.response.text
     assert str(len(PNG)) in result.response.text
     assert result.response.tone is ResponseTone.NEUTRAL
-    assert result.teaching.steps == []
 
 
 def test_mock_works_without_a_screenshot():
