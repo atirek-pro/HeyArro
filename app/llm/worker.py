@@ -1,6 +1,15 @@
-"""Runs an LLM request on a thread pool so the Qt UI thread stays responsive."""
+"""Runs an LLM request on a thread pool so the Qt UI thread stays responsive.
+
+A model call can outlive the window it was made for (a slow answer while the user
+quits), so emitting is guarded: once Qt has torn the signals object down there is
+nobody left to tell.
+"""
+
+import logging
 
 from PySide6.QtCore import QObject, QRunnable, Signal
+
+logger = logging.getLogger(__name__)
 
 
 class LLMSignals(QObject):
@@ -23,6 +32,13 @@ class LLMWorker(QRunnable):
         try:
             response = self._provider.process(self._request)
         except Exception as exc:
-            self.signals.failed.emit(str(exc))
+            self._safe_emit(lambda: self.signals.failed.emit(str(exc)))
             return
-        self.signals.finished.emit(response)
+        self._safe_emit(lambda: self.signals.finished.emit(response))
+
+    def _safe_emit(self, emit):
+        """Emit unless the application is shutting down and the signals are gone."""
+        try:
+            emit()
+        except RuntimeError:
+            logger.debug("Dropping an answer: the application is shutting down")

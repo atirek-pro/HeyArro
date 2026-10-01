@@ -20,7 +20,7 @@ from app.llm.provider import (
     SYSTEM_INSTRUCTION,
     VisionLLMProvider,
     VisionLLMRequest,
-    build_user_prompt,
+    build_user_query,
     validate_screenshot,
 )
 from app.llm.response import HeyArroResponse
@@ -139,11 +139,7 @@ class GeminiVisionProvider(VisionLLMProvider):
             parts.append(types.Part.from_bytes(data=request.screenshot, mime_type=mime_type))
         parts.append(
             types.Part.from_text(
-                text=build_user_prompt(
-                    request.transcript,
-                    mime_type is not None,
-                    request.guidance,
-                )
+                text=build_user_query(request.transcript, mime_type is not None)
             )
         )
 

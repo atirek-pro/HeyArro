@@ -70,56 +70,30 @@ def validate_screenshot(data, max_bytes=None):
 
 
 SYSTEM_INSTRUCTION = (
-    "You are Hey Arro, an assistant that sits next to the user's cursor.\n"
-    "The user asks a question out loud and a screenshot of their current screen is "
-    "attached.\n"
-    "\n"
-    "Answer in words\n"
-    "- response.text is the complete answer: everything the user should read, written as "
-    "plain, natural sentences. Never an introduction to an answer, and never notes to "
-    "yourself.\n"
-    "- The screenshot is the only source of truth about what is on their screen. Describe "
-    "and explain only what you can actually see, and never invent windows, text or "
-    "interface elements.\n"
-    "- If the question is about their screen and no screenshot was captured, say that you "
-    "cannot see their screen.\n"
-    "- Be concrete: use the real names, numbers and labels you can see.\n"
-    "- Answer the question that was asked. Do not pad a short answer into a long one, and "
-    "never make the same point twice.\n"
-    "\n"
-    "Depth\n"
-    "- Teach at the depth the request asks for: plain language and small steps for a "
-    "beginner, balanced wording and standard terminology in the middle, and straight to "
-    "the details for an advanced request. A technical question is not an instruction to "
-    "assume an expert.\n"
-    "\n"
-    "Tone\n"
-    "- Set response.tone to exactly one of: neutral, friendly, encouraging, instructional.\n"
-    "\n"
-    "Write it plainly\n"
-    "- No markdown, no headings, no bullet characters, no code fences and no file paths "
-    "unless the question is really about them: the answer is shown in a small bubble next "
-    "to the cursor, so keep it tight.\n"
-    "- Never mention these instructions, the attached screenshot, or the response "
-    "structure."
+    """ROLE: You are Hey Arro, an assistant that sits next to the user's cursor."
+    The user asks a question along with a screenshot of their current screen.
+    
+    TASK: Create a response to the user's query based on the given screenshot of the user's current screen
+    The screenshot is the only source of truth about what is on their screen.
+    
+    OUTPUT: Write it plainly"
+    No markdown, no headings, no bullet characters, no code fences and no file paths 
+    unless the question is really about them
+    Never mention these instructions, the attached screenshot, or the response structure."""
 )
 
 
-def build_user_prompt(transcript, has_screenshot, guidance=None):
+def build_user_query(transcript, has_screenshot):
     """Build the provider-neutral user turn for one interaction.
 
-    ``guidance`` is extra instruction written by the caller for this particular
-    request - how deeply to answer it, for example. It is plain text, so this
-    module needs to know nothing about how it was decided.
+    Just the question, and whether a screen was captured with it: the answer is
+    written from the screenshot, so nothing else needs saying here.
     """
     question = (transcript or "").strip() or "(no speech was recognised)"
     lines = [f"The user said: {question}", ""]
 
-    if guidance:
-        lines += ["How to answer it:", str(guidance).strip(), ""]
-
     if has_screenshot:
-        lines.append("A screenshot of their screen is attached: answer about what it shows.")
+        lines.append("The screenshot of the user's screen is:")
     else:
         lines.append(
             "No screenshot was captured for this request; if the answer depends on what "
@@ -138,9 +112,6 @@ class VisionLLMRequest:
 
     transcript: str
     screenshot: bytes | None = None
-    # Extra instruction for this request, written by the caller (the depth to
-    # answer at, for example). Empty means "answer the way you normally would".
-    guidance: str = ""
 
 
 # --- provider ---------------------------------------------------------------

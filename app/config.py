@@ -39,17 +39,6 @@ def _read(name, default=None, cast=str):
         return default
 
 
-# --- assistant behaviour ----------------------------------------------------
-
-# How long the transcript and the answer stay on screen next to the cursor.
-TRANSCRIPT_DISPLAY_MS = _read("TRANSCRIPT_DISPLAY_MS", 4000, int)
-
-# How long the RESPONDING state lasts before returning to IDLE.
-RESPONDING_HOLD_MS = _read("RESPONDING_HOLD_MS", 2500, int)
-
-# How long the ERROR state stays visible before returning to IDLE.
-ERROR_HOLD_MS = _read("ERROR_HOLD_MS", 1200, int)
-
 # --- speech to text (local faster-whisper) ----------------------------------
 
 # tiny | base | small | medium | large-v3 - bigger is slower but more accurate.
@@ -86,5 +75,5 @@ MAX_SCREENSHOT_BYTES = _read("MAX_SCREENSHOT_BYTES", 8 * 1024 * 1024, int)
 
 # --- mock provider ----------------------------------------------------------
 
-# Artificial latency, so the RESPONDING state stays visible while testing.
+# Artificial latency, so an offline run still takes a realistic amount of time.
 MOCK_LLM_DELAY_SECONDS = _read("MOCK_LLM_DELAY_SECONDS", 0.4, float)

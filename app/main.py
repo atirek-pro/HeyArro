@@ -1,8 +1,9 @@
 """Hey Arro entry point.
 
-Composition root only: it builds the services, hands them to
-ApplicationCoordinator, and connects the coordinator's state and results to the
-UI. The lifecycle itself lives in app/coordinator.py and app/state.py.
+Composition root only: it builds the services and hands them to
+ApplicationCoordinator, which drives one interaction at a time. The application
+displays nothing: the question, the screen it was asked about and the answer are
+written to the log.
 """
 
 import logging
@@ -12,30 +13,28 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from app.audio.recorder import RECORDINGS_DIR, Recorder
 from app.capture import create_screen_capture_provider
-from app.config import LLM_PROVIDER, SCREENSHOT_DIR, TRANSCRIPT_DISPLAY_MS
+from app.config import LLM_PROVIDER, SCREENSHOT_DIR
 from app.coordinator import ApplicationCoordinator
 from app.hotkey.global_hotkey import GlobalHotkey
 from app.llm import UnsupportedProviderError, get_llm_provider
-from app.state import ApplicationState
 from app.transcription import create_transcription_provider
-from app.ui.caption import Caption
-from app.ui.companion import Companion
-from app.ui.indicator import Indicator
 from app.ui.tray import Tray
 
 logger = logging.getLogger(__name__)
 
 
-def _status_text(coordinator, transcription, capture, llm):
+def _status_text(transcription, capture, llm):
     return (
         "Hey Arro is running in the background.\n\n"
         "Global hotkey: Ctrl + Alt (hold it while you ask)\n"
-        f"State: {coordinator.state.value}\n"
         f"Speech to text: {type(transcription).__name__}\n"
         f"Screen capture: {type(capture).__name__}\n"
-        f"Provider: {LLM_PROVIDER} ({type(llm).__name__}, model: {getattr(llm, 'model', 'n/a')})\n\n"
+        f"Provider: {LLM_PROVIDER} ({type(llm).__name__}, model: {getattr(llm, 'model', 'n/a')})\n"
+        f"Recordings: {RECORDINGS_DIR}\n"
+        f"Screenshots: {SCREENSHOT_DIR}\n\n"
         "Hold Ctrl + Alt, ask your question out loud, then release. "
-        "The answer appears next to the cursor."
+        "What was asked, what was on screen and what the model answered are "
+        "written to the log."
     )
 
 
@@ -59,9 +58,6 @@ def main():
     app.setApplicationName("Hey Arro")
     app.setQuitOnLastWindowClosed(False)
 
-    indicator = Indicator()
-    companion = Companion()
-    caption = Caption(TRANSCRIPT_DISPLAY_MS)
     hotkey = GlobalHotkey(keys=("ctrl", "alt"))
     recorder = Recorder()
     transcription = create_transcription_provider()
@@ -78,40 +74,18 @@ def main():
 
     tray = Tray(
         on_status=lambda: QMessageBox.information(
-            None, "Hey Arro", _status_text(coordinator, transcription, capture, llm)
+            None, "Hey Arro", _status_text(transcription, capture, llm)
         ),
         on_quit=app.quit,
     )
 
-    # --- view wiring: the coordinator drives, the views only render ---------
-
-    def on_state_changed(previous, current):
-        companion.render_state(current)
-
-        if current is ApplicationState.LISTENING:
-            caption.hide()
-            indicator.show_listening()
-        elif current is ApplicationState.PROCESSING:
-            indicator.show_released()
-
     def on_error(message):
+        # The only thing that ever surfaces outside the log.
         tray.showMessage("Hey Arro", message, QSystemTrayIcon.Warning, 5000)
 
-    def on_input(transcript, _screenshot):
-        # What was heard, so a misheard question is obvious straight away.
-        if transcript:
-            caption.show_text(transcript)
-
-    def on_response(response):
-        caption.show_text(response.response.text)
-
-    coordinator.state_changed.connect(on_state_changed)
     coordinator.error_occurred.connect(on_error)
-    coordinator.input_ready.connect(on_input)
-    coordinator.response_ready.connect(on_response)
 
     tray.show()
-    companion.start()
 
     try:
         hotkey.start()
@@ -133,9 +107,7 @@ def main():
     )
 
     app.aboutToQuit.connect(coordinator.shutdown)
-    app.aboutToQuit.connect(caption.hide)
     app.aboutToQuit.connect(recorder.abort)
-    app.aboutToQuit.connect(companion.stop)
     app.aboutToQuit.connect(hotkey.stop)
 
     return app.exec()

@@ -20,7 +20,7 @@ from app.llm.provider import (
     UnsupportedProviderError,
     VisionLLMProvider,
     VisionLLMRequest,
-    build_user_prompt,
+    build_user_query,
     image_mime_type,
     validate_screenshot,
 )
@@ -118,7 +118,6 @@ def test_request_screenshot_is_optional():
     request = VisionLLMRequest("hello")
 
     assert request.screenshot is None
-    assert request.guidance == ""
 
 
 # --- provider factory -------------------------------------------------------
@@ -226,18 +225,6 @@ def test_gemini_missing_screenshot_sends_text_only():
     assert not [part for part in gemini_parts(client) if getattr(part, "inline_data", None)]
     texts = " ".join(part.text for part in gemini_parts(client) if getattr(part, "text", None))
     assert "hello" in texts
-
-
-def test_gemini_sends_the_guidance_with_the_question():
-    provider, client = gemini(structured())
-
-    provider.process(
-        VisionLLMRequest("hi", png_bytes(1280, 720), guidance="Answer it plainly.")
-    )
-
-    texts = " ".join(part.text for part in gemini_parts(client) if getattr(part, "text", None))
-    assert "How to answer it:" in texts
-    assert "Answer it plainly." in texts
 
 
 # --- gemini: structured response --------------------------------------------
@@ -423,30 +410,31 @@ def png_bytes(width, height):
 # --- prompt -----------------------------------------------------------------
 
 
-def test_system_instruction_is_provider_neutral_and_guards_against_invention():
-    assert "screenshot" in SYSTEM_INSTRUCTION.lower()
-    assert "invent" in SYSTEM_INSTRUCTION.lower()
-    assert not any(vendor in SYSTEM_INSTRUCTION.lower() for vendor in ("gemini", "openai", "claude"))
-
-
-def test_system_instruction_asks_for_the_whole_answer_in_words():
+def test_system_instruction_is_provider_neutral_and_names_the_screenshot():
     lowered = SYSTEM_INSTRUCTION.lower()
 
-    assert "response.text is the complete answer" in lowered
+    assert "screenshot" in lowered
+    assert "only source of truth" in lowered
+    assert not any(vendor in lowered for vendor in ("gemini", "openai", "claude"))
+
+
+def test_system_instruction_asks_for_plain_output():
+    lowered = SYSTEM_INSTRUCTION.lower()
+
     assert "no markdown" in lowered
-    assert "response.tone" in lowered
+    assert "never mention these instructions" in lowered
 
 
-def test_user_prompt_carries_the_question():
-    assert "What is this error?" in build_user_prompt("What is this error?", True)
+def test_user_query_carries_the_question():
+    assert "What is this error?" in build_user_query("What is this error?", True)
 
 
-def test_user_prompt_asks_for_a_transcript_only_answer_without_a_screenshot():
-    assert "No screenshot" in build_user_prompt("hello", False)
+def test_user_query_asks_for_a_transcript_only_answer_without_a_screenshot():
+    assert "No screenshot" in build_user_query("hello", False)
 
 
-def test_user_prompt_asks_about_the_screenshot():
-    prompt = build_user_prompt("explain this", True)
+def test_user_query_asks_about_the_screenshot():
+    prompt = build_user_query("explain this", True)
 
     assert "screenshot" in prompt.lower()
     # Nothing about coordinates any more: the answer is words, not targets.
