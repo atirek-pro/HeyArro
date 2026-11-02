@@ -12,16 +12,7 @@ from app.llm.provider import (
     VisionLLMProvider,
     VisionLLMRequest,
 )
-from app.llm.response import (
-    HeyArroResponse,
-    ResponseContent,
-    ResponseTone,
-    TargetType,
-    TeachingMode,
-    TeachingPlan,
-    TeachingStep,
-    VisualTarget,
-)
+from app.llm.response import HeyArroResponse, ResponseContent, ResponseTone
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +33,9 @@ __all__ = [
     "ProviderNotImplementedError",
     "ResponseContent",
     "ResponseTone",
-    "TargetType",
-    "TeachingMode",
-    "TeachingPlan",
-    "TeachingStep",
     "UnsupportedProviderError",
     "VisionLLMProvider",
     "VisionLLMRequest",
-    "VisualTarget",
     "available_providers",
     "get_llm_provider",
 ]

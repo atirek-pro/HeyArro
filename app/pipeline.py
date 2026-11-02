@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from PySide6.QtCore import QObject, Signal
 
 from app.capture.provider import ScreenCaptureResult
+from app.refinement.provider import RefinementResult
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class ProcessingResult:
     audio_path: str | None = None
     transcript: str | None = None
     screenshot: ScreenCaptureResult | None = None
+    refinement: RefinementResult | None = None
     transcript_error: str | None = None
     capture_error: str | None = None
 
@@ -55,6 +57,11 @@ class ProcessingCoordinator(QObject):
 
     def set_screenshot(self, capture):
         self._finish_side("capture", screenshot=capture)
+
+    def set_refinement(self, refinement):
+        """Attach the segments of the screenshot; the capture side finishes separately."""
+        if self._result is not None:
+            self._result = replace(self._result, refinement=refinement)
 
     def set_capture_error(self, message):
         self._finish_side("capture", capture_error=message)

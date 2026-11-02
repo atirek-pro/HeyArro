@@ -4,3 +4,5 @@ heyarro-env/
 .pytest_cache/
 __pycache__/
 resume-with.txt
+screen-segments/
+.claude

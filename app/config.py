@@ -39,25 +39,6 @@ def _read(name, default=None, cast=str):
         return default
 
 
-def _read_flag(name, default=False):
-    """Read a boolean flag, treating "1/true/yes/on" (any case) as True."""
-    raw = os.environ.get(name) or os.environ.get(f"CLICKY_{name}")
-    if raw is None or raw == "":
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-# --- assistant behaviour ----------------------------------------------------
-
-# How long the transcript bubble stays on screen next to the cursor.
-TRANSCRIPT_DISPLAY_MS = _read("TRANSCRIPT_DISPLAY_MS", 4000, int)
-
-# How long the RESPONDING state lasts before returning to IDLE.
-RESPONDING_HOLD_MS = _read("RESPONDING_HOLD_MS", 2500, int)
-
-# How long the ERROR state stays visible before returning to IDLE.
-ERROR_HOLD_MS = _read("ERROR_HOLD_MS", 1200, int)
-
 # --- speech to text (local faster-whisper) ----------------------------------
 
 # tiny | base | small | medium | large-v3 - bigger is slower but more accurate.
@@ -79,52 +60,47 @@ SCREENSHOT_DIR = (
     else Path(tempfile.gettempdir()) / "clicky-screenshots"
 )
 
-# --- text to speech (voice output) ------------------------------------------
+# --- screenshot refinement (unstructured) -----------------------------------
 
-# "windows" (local SAPI5 voice via pyttsx3), "mock" (records but stays silent),
-# "elevenlabs" (placeholder; reports "not implemented yet").
-TTS_PROVIDER = (_read("TTS_PROVIDER", "windows") or "windows").strip().lower()
-
-# Optional tuning for the Windows voice; None keeps the engine's own defaults.
-TTS_RATE_WPM = _read("TTS_RATE_WPM", None, int)
-TTS_VOLUME = _read("TTS_VOLUME", None, float)
-TTS_VOICE_ID = _read("TTS_VOICE_ID")
-
-# --- visual teaching overlay ------------------------------------------------
-
-# Draw Arro's pointer and target highlights on a transparent, click-through
-# overlay. Turn off to run headless or to fall back to voice-only answers.
-TEACHING_ENABLED = _read_flag("TEACHING_ENABLED", True)
-
-# Development aid only: show the raw response text in the cursor caption again.
-# The normal flow shows the teaching overlay instead.
-DEBUG_RESPONSE_CAPTION = _read_flag("DEBUG_RESPONSE_CAPTION", False)
-
-# --- visual grounding (target refinement) -----------------------------------
-
-# Refine each approximate target with a second, high-resolution vision pass.
-# Off means the first pass's coordinates are used exactly as they always were.
-VISUAL_GROUNDING_ENABLED = _read_flag("VISUAL_GROUNDING_ENABLED", True)
-
-# Context (in screenshot pixels) added around an approximate target before the
-# refinement crop is taken. The first pass may already be inaccurate, so the
-# crop deliberately includes surroundings.
-GROUNDING_CROP_PADDING = _read("GROUNDING_CROP_PADDING", 240, int)
-
-# A refinement is only accepted when the model is at least this confident;
-# otherwise the approximate target is kept.
-GROUNDING_CONFIDENCE_THRESHOLD = _read("GROUNDING_CONFIDENCE_THRESHOLD", 0.70, float)
-
-# Development aid: save the crop and annotated images for each refinement so the
-# first pass's guess can be compared with what refinement found.
-VISUAL_GROUNDING_DEBUG = _read_flag("VISUAL_GROUNDING_DEBUG", False)
-
-_grounding_dir = _read("GROUNDING_DEBUG_DIR")
-GROUNDING_DEBUG_DIR = (
-    Path(_grounding_dir)
-    if _grounding_dir
-    else Path(tempfile.gettempdir()) / "clicky-grounding"
+# Off switch: "false" skips refinement and saves the screenshot to SCREENSHOT_DIR.
+REFINEMENT_ENABLED = (_read("REFINEMENT_ENABLED", "true") or "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
 )
+
+# Each screenshot gets its own sub-folder here, holding the image and its segments.
+# Created in the directory the app is started from unless overridden.
+_refinement_dir = _read("REFINEMENT_DIR")
+REFINEMENT_DIR = Path(_refinement_dir) if _refinement_dir else Path.cwd() / "screen-segments"
+
+# hi_res | ocr_only | auto - hi_res runs layout detection (a model downloaded on first
+# use) and finds panels, images and tables; ocr_only finds text blocks only.
+REFINEMENT_STRATEGY = (_read("REFINEMENT_STRATEGY", "hi_res") or "hi_res").strip().lower()
+# Tesseract language codes, comma separated (eng, deu, eng,fra...). Empty lets
+# unstructured use its own default.
+REFINEMENT_LANGUAGES = tuple(
+    code.strip() for code in (_read("REFINEMENT_LANGUAGES", "") or "").split(",") if code.strip()
+)
+# Segments covering fewer pixels than this are dropped as noise.
+REFINEMENT_MIN_SEGMENT_PIXELS = _read("REFINEMENT_MIN_SEGMENT_PIXELS", 16, int)
+
+# --- relevant segment selection (Gemini) --------------------------------------
+
+# After the transcript arrives, Gemini scores which segments matter for the question and
+# the result is saved as relevant_ss_manifest.json. Needs refinement and GEMINI_API_KEY.
+SEGMENT_SELECTION_ENABLED = (_read("SEGMENT_SELECTION_ENABLED", "true") or "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+# Empty = use GEMINI_MODEL. A smaller, faster model is usually enough for this step.
+SEGMENT_SELECTION_MODEL = _read("SEGMENT_SELECTION_MODEL")
+# Tokens the model may spend thinking before it answers: 0 = none (fastest), -1 = the
+# model's own default.
+SEGMENT_SELECTION_THINKING_BUDGET = _read("SEGMENT_SELECTION_THINKING_BUDGET", 0, int)
 
 # --- vision LLM provider ----------------------------------------------------
 
@@ -141,5 +117,5 @@ MAX_SCREENSHOT_BYTES = _read("MAX_SCREENSHOT_BYTES", 8 * 1024 * 1024, int)
 
 # --- mock provider ----------------------------------------------------------
 
-# Artificial latency, so the RESPONDING state stays visible while testing.
+# Artificial latency, so an offline run still takes a realistic amount of time.
 MOCK_LLM_DELAY_SECONDS = _read("MOCK_LLM_DELAY_SECONDS", 0.4, float)
