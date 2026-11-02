@@ -60,6 +60,48 @@ SCREENSHOT_DIR = (
     else Path(tempfile.gettempdir()) / "clicky-screenshots"
 )
 
+# --- screenshot refinement (unstructured) -----------------------------------
+
+# Off switch: "false" skips refinement and saves the screenshot to SCREENSHOT_DIR.
+REFINEMENT_ENABLED = (_read("REFINEMENT_ENABLED", "true") or "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+
+# Each screenshot gets its own sub-folder here, holding the image and its segments.
+# Created in the directory the app is started from unless overridden.
+_refinement_dir = _read("REFINEMENT_DIR")
+REFINEMENT_DIR = Path(_refinement_dir) if _refinement_dir else Path.cwd() / "screen-segments"
+
+# hi_res | ocr_only | auto - hi_res runs layout detection (a model downloaded on first
+# use) and finds panels, images and tables; ocr_only finds text blocks only.
+REFINEMENT_STRATEGY = (_read("REFINEMENT_STRATEGY", "hi_res") or "hi_res").strip().lower()
+# Tesseract language codes, comma separated (eng, deu, eng,fra...). Empty lets
+# unstructured use its own default.
+REFINEMENT_LANGUAGES = tuple(
+    code.strip() for code in (_read("REFINEMENT_LANGUAGES", "") or "").split(",") if code.strip()
+)
+# Segments covering fewer pixels than this are dropped as noise.
+REFINEMENT_MIN_SEGMENT_PIXELS = _read("REFINEMENT_MIN_SEGMENT_PIXELS", 16, int)
+
+# --- relevant segment selection (Gemini) --------------------------------------
+
+# After the transcript arrives, Gemini scores which segments matter for the question and
+# the result is saved as relevant_ss_manifest.json. Needs refinement and GEMINI_API_KEY.
+SEGMENT_SELECTION_ENABLED = (_read("SEGMENT_SELECTION_ENABLED", "true") or "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+# Empty = use GEMINI_MODEL. A smaller, faster model is usually enough for this step.
+SEGMENT_SELECTION_MODEL = _read("SEGMENT_SELECTION_MODEL")
+# Tokens the model may spend thinking before it answers: 0 = none (fastest), -1 = the
+# model's own default.
+SEGMENT_SELECTION_THINKING_BUDGET = _read("SEGMENT_SELECTION_THINKING_BUDGET", 0, int)
+
 # --- vision LLM provider ----------------------------------------------------
 
 # "gemini" (real), "mock" (offline echo), "openai" / "claude" (placeholders).

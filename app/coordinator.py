@@ -7,7 +7,9 @@ One interaction, end to end:
 
     hotkey pressed   -> record
     hotkey released  -> transcribe + capture the screen
-    both ready       -> log the input, then send it to the model
+    screenshot       -> refine it first: segment it into its own folder
+    both ready       -> score the relevant segments (relevant_ss_manifest.json),
+                        log the input, then send it to the model
     answer           -> log it
 
 There is no state machine and no output stage. The answer is logged and that is
@@ -26,6 +28,7 @@ from app.capture.worker import CaptureWorker
 from app.llm import VisionLLMProvider, VisionLLMRequest
 from app.llm.worker import LLMWorker
 from app.pipeline import ProcessingCoordinator
+from app.refinement.worker import RefinementWorker, SelectionWorker
 from app.transcription.worker import TranscriptionWorker
 
 logger = logging.getLogger(__name__)
@@ -54,6 +57,9 @@ class ApplicationCoordinator(QObject):
         llm: VisionLLMProvider,
         thread_pool=None,
         screenshot_dir=config.SCREENSHOT_DIR,
+        refinement=None,
+        refinement_dir=config.REFINEMENT_DIR,
+        segment_selector=None,
         parent=None,
     ):
         super().__init__(parent)
@@ -66,6 +72,11 @@ class ApplicationCoordinator(QObject):
 
         self._thread_pool = thread_pool if thread_pool is not None else QThreadPool.globalInstance()
         self._screenshot_dir = screenshot_dir
+        # Optional: without a refinement provider the screenshot is only saved.
+        self._refinement = refinement
+        self._refinement_dir = refinement_dir
+        # Optional: scores which segments matter once the transcript is known.
+        self._segment_selector = segment_selector
 
         # One interaction at a time: a press is ignored while a recording or a
         # question is still in flight, so two runs can never interleave in the log.
@@ -153,6 +164,43 @@ class ApplicationCoordinator(QObject):
         self._thread_pool.start(worker)
 
     def _on_capture(self, result):
+        """The first step on a received screenshot is refinement, when configured."""
+        logger.info(
+            "Screenshot received: monitor=%s %sx%s %s bytes",
+            result.monitor_index,
+            result.width,
+            result.height,
+            result.size_bytes,
+        )
+        if self._refinement is None:
+            logger.info("Refinement is not configured; saving the screenshot as is")
+            self._save_and_continue(result)
+            return
+
+        logger.info(
+            "Refining screenshot with %s into %s", type(self._refinement).__name__, self._refinement_dir
+        )
+        worker = self._track(RefinementWorker(self._refinement, result, self._refinement_dir))
+        worker.signals.finished.connect(lambda refined: self._on_refined(result, refined))
+        worker.signals.failed.connect(lambda message: self._on_refinement_failed(result, message))
+        self._thread_pool.start(worker)
+
+    def _on_refined(self, result, refined):
+        logger.info(
+            "Refinement complete: %s segment(s), strategy=%s, folder=%s",
+            refined.segment_count,
+            refined.strategy,
+            refined.folder,
+        )
+        self._pipeline.set_refinement(refined)
+        self._continue_with(replace(result, path=refined.screenshot_path))
+
+    def _on_refinement_failed(self, result, message):
+        # Segments are an enrichment: a failed refinement must not lose the question.
+        logger.error("Refinement failed, continuing with the plain screenshot: %s", message)
+        self._save_and_continue(result)
+
+    def _save_and_continue(self, result):
         try:
             path = save_png(result, self._screenshot_dir)
         except OSError as exc:
@@ -160,8 +208,10 @@ class ApplicationCoordinator(QObject):
             self._pipeline.set_capture_error(f"Could not save the screenshot: {exc}")
             return
 
-        result = replace(result, path=str(path))
-        logger.info("Screenshot saved to %s", path)
+        self._continue_with(replace(result, path=str(path)))
+
+    def _continue_with(self, result):
+        logger.info("Screenshot saved to %s", result.path)
         logger.info(
             "Screenshot details: monitor=%s width=%s height=%s timestamp=%s size_bytes=%s",
             result.monitor_index,
@@ -185,7 +235,42 @@ class ApplicationCoordinator(QObject):
             result.transcript,
             result.screenshot.path if result.screenshot else None,
         )
+
+        refinement = result.refinement
+        if self._segment_selector is not None and refinement is not None and refinement.segments:
+            self._select_segments(result)
+            return
         self._ask_model(result)
+
+    # --- relevant segments --------------------------------------------------
+
+    def _select_segments(self, result):
+        """Score the segments against the transcript, then ask the model."""
+        logger.info(
+            "Selecting relevant segments with %s (%s segment(s))",
+            type(self._segment_selector).__name__,
+            result.refinement.segment_count,
+        )
+        worker = self._track(SelectionWorker(self._segment_selector, result.refinement, result.transcript))
+        worker.signals.finished.connect(lambda selection: self._on_segments_selected(result, selection))
+        worker.signals.failed.connect(lambda message: self._on_selection_failed(result, message))
+        self._thread_pool.start(worker)
+
+    def _on_segments_selected(self, result, selection):
+        logger.info(
+            "Segment selection complete: %s relevant, %.2fs, manifest=%s",
+            selection.selected_count,
+            selection.seconds,
+            selection.manifest_path,
+        )
+        self._ask_model(result)
+
+    def _on_selection_failed(self, result, message):
+        # Selection is an enrichment: a failure must not lose the question.
+        logger.error("Segment selection failed, continuing without it: %s", message)
+        self._ask_model(result)
+
+    # --- the model ----------------------------------------------------------
 
     def _ask_model(self, result):
         """Log exactly what the model is given, then ask it."""

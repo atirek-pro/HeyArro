@@ -6,3 +6,5 @@ mss
 google-genai
 python-dotenv
 pytest
+
+unstructured[image]

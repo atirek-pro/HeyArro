@@ -13,10 +13,11 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from app.audio.recorder import RECORDINGS_DIR, Recorder
 from app.capture import create_screen_capture_provider
-from app.config import LLM_PROVIDER, SCREENSHOT_DIR
+from app.config import LLM_PROVIDER, REFINEMENT_DIR, REFINEMENT_ENABLED, SCREENSHOT_DIR
 from app.coordinator import ApplicationCoordinator
 from app.hotkey.global_hotkey import GlobalHotkey
 from app.llm import UnsupportedProviderError, get_llm_provider
+from app.refinement import create_refinement_provider, create_segment_selector
 from app.transcription import create_transcription_provider
 from app.ui.tray import Tray
 
@@ -31,7 +32,8 @@ def _status_text(transcription, capture, llm):
         f"Screen capture: {type(capture).__name__}\n"
         f"Provider: {LLM_PROVIDER} ({type(llm).__name__}, model: {getattr(llm, 'model', 'n/a')})\n"
         f"Recordings: {RECORDINGS_DIR}\n"
-        f"Screenshots: {SCREENSHOT_DIR}\n\n"
+        f"Screenshots: {SCREENSHOT_DIR}\n"
+        f"Screen segments: {REFINEMENT_DIR if REFINEMENT_ENABLED else 'disabled'}\n\n"
         "Hold Ctrl + Alt, ask your question out loud, then release. "
         "What was asked, what was on screen and what the model answered are "
         "written to the log."
@@ -63,6 +65,9 @@ def main():
     transcription = create_transcription_provider()
     capture = create_screen_capture_provider()
     llm = _select_llm_provider()
+    refinement = create_refinement_provider() if REFINEMENT_ENABLED else None
+    # Selection calls Gemini, so the offline mock provider skips it.
+    segment_selector = create_segment_selector() if refinement and LLM_PROVIDER == "gemini" else None
 
     coordinator = ApplicationCoordinator(
         hotkey=hotkey,
@@ -70,6 +75,8 @@ def main():
         transcription=transcription,
         capture=capture,
         llm=llm,
+        refinement=refinement,
+        segment_selector=segment_selector,
     )
 
     tray = Tray(
