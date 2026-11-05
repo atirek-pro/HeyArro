@@ -1,4 +1,4 @@
-"""Central coordinator: drives one interaction from the microphone to the model.
+"""Central coordinator: drives one interaction from the microphone to the refined screen.
 
 The coordinator decides WHEN each service runs. The services own HOW they work,
 so no microphone, Whisper, mss or model code lives here.
@@ -8,13 +8,12 @@ One interaction, end to end:
     hotkey pressed   -> record
     hotkey released  -> transcribe + capture the screen
     screenshot       -> refine it first: segment it into its own folder
-    both ready       -> score the relevant segments (relevant_ss_manifest.json),
-                        log the input, then send it to the model
-    answer           -> log it
+    both ready       -> log the input, then categorise the question and score the
+                        relevant segments (relevant_ss_manifest.json)
 
-There is no state machine and no output stage. The answer is logged and that is
-all, so everything the application did is in the log: what the model was given,
-and what it answered.
+There is no state machine, no output stage and no model answer: the interaction
+ends once the input is captured and refined, so everything the application did is
+in the log.
 """
 
 import logging
@@ -25,8 +24,6 @@ from PySide6.QtCore import QObject, QThreadPool, Signal
 from app import config
 from app.capture import save_png
 from app.capture.worker import CaptureWorker
-from app.llm import VisionLLMProvider, VisionLLMRequest
-from app.llm.worker import LLMWorker
 from app.pipeline import ProcessingCoordinator
 from app.refinement.worker import RefinementWorker, SelectionWorker
 from app.transcription.worker import TranscriptionWorker
@@ -35,15 +32,15 @@ logger = logging.getLogger(__name__)
 
 
 class ApplicationCoordinator(QObject):
-    """Drives one interaction: record, transcribe, capture, ask, log.
+    """Drives one interaction: record, transcribe, capture, refine, log.
 
     Signals
         error_occurred(str): a human-readable description of a failed step.
 
     The providers are whatever concrete implementations the composition root
     selected; this class never chooses a vendor or knows one. It owns the
-    lifecycle only - recording, transcription, capture and the model call - and
-    no prompt text, no state machine and no output stage.
+    lifecycle only - recording, transcription, capture and refinement - and no
+    prompt text, no state machine and no output stage.
     """
 
     error_occurred = Signal(str)
@@ -54,7 +51,6 @@ class ApplicationCoordinator(QObject):
         recorder,
         transcription,
         capture,
-        llm: VisionLLMProvider,
         thread_pool=None,
         screenshot_dir=config.SCREENSHOT_DIR,
         refinement=None,
@@ -68,7 +64,6 @@ class ApplicationCoordinator(QObject):
         self._recorder = recorder
         self._transcription = transcription
         self._capture = capture
-        self._llm = llm
 
         self._thread_pool = thread_pool if thread_pool is not None else QThreadPool.globalInstance()
         self._screenshot_dir = screenshot_dir
@@ -222,7 +217,7 @@ class ApplicationCoordinator(QObject):
         )
         self._pipeline.set_screenshot(result)
 
-    # --- input, then the model ----------------------------------------------
+    # --- input, then the relevant segments ----------------------------------
 
     def _on_processing_complete(self, result):
         problem = result.transcript_error or result.capture_error
@@ -230,22 +225,35 @@ class ApplicationCoordinator(QObject):
             self._fail(problem)
             return
 
-        logger.info(
-            "Input complete: transcript=%r screenshot=%s",
-            result.transcript,
-            result.screenshot.path if result.screenshot else None,
-        )
+        self._log_input(result)
 
         refinement = result.refinement
         if self._segment_selector is not None and refinement is not None and refinement.segments:
             self._select_segments(result)
             return
-        self._ask_model(result)
+        self._finish()
 
-    # --- relevant segments --------------------------------------------------
+    def _log_input(self, result):
+        screenshot = result.screenshot
+        logger.info("[Input] transcript: %r", result.transcript)
+        if screenshot is not None:
+            logger.info(
+                "[Input] screenshot: %sx%s, %s bytes, monitor %s, saved to %s",
+                screenshot.width,
+                screenshot.height,
+                screenshot.size_bytes,
+                screenshot.monitor_index,
+                screenshot.path,
+            )
+        else:
+            logger.info("[Input] screenshot: none (no screen was captured)")
+
+    def _finish(self):
+        self._working = False
+        logger.info("Interaction complete")
 
     def _select_segments(self, result):
-        """Score the segments against the transcript, then ask the model."""
+        """Categorise the question and score the segments against the transcript."""
         logger.info(
             "Selecting relevant segments with %s (%s segment(s))",
             type(self._segment_selector).__name__,
@@ -263,51 +271,12 @@ class ApplicationCoordinator(QObject):
             selection.seconds,
             selection.manifest_path,
         )
-        self._ask_model(result)
+        self._finish()
 
     def _on_selection_failed(self, result, message):
-        # Selection is an enrichment: a failure must not lose the question.
-        logger.error("Segment selection failed, continuing without it: %s", message)
-        self._ask_model(result)
-
-    # --- the model ----------------------------------------------------------
-
-    def _ask_model(self, result):
-        """Log exactly what the model is given, then ask it."""
-        screenshot = result.screenshot
-        request = VisionLLMRequest(
-            transcript=result.transcript,
-            screenshot=screenshot.image if screenshot else None,
-        )
-
-        logger.info("[Input] transcript: %r", request.transcript)
-        if screenshot is not None:
-            logger.info(
-                "[Input] screenshot: %sx%s, %s bytes, monitor %s",
-                screenshot.width,
-                screenshot.height,
-                screenshot.size_bytes,
-                screenshot.monitor_index,
-            )
-        else:
-            logger.info("[Input] screenshot: none (no screen was captured)")
-        logger.info(
-            "[Input] sending to %s (model=%s)",
-            type(self._llm).__name__,
-            getattr(self._llm, "model", "n/a"),
-        )
-
-        worker = self._track(LLMWorker(self._llm, request))
-        worker.signals.finished.connect(self._on_response)
-        worker.signals.failed.connect(self._fail)
-        self._thread_pool.start(worker)
-
-    def _on_response(self, response):
-        """Log the answer. Nothing is displayed."""
-        self._working = False
-        text = response.response.text or ""
-        logger.info("Response [tone=%s, %s characters]", response.response.tone.value, len(text))
-        logger.info("[Output] %s", text)
+        # Selection is an enrichment: a failure ends the interaction, it does not crash it.
+        logger.error("Segment selection failed: %s", message)
+        self._finish()
 
     # --- failures -----------------------------------------------------------
 

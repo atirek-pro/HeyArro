@@ -7,6 +7,7 @@ from app.refinement.provider import (
     RefinementResult,
     ScreenRefinementError,
     ScreenRefinementProvider,
+    ResponseCategory,
     ScreenSegment,
     SegmentSelectionError,
     SegmentSelector,
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "RefinementResult",
+    "ResponseCategory",
     "ScreenRefinementError",
     "ScreenRefinementProvider",
     "ScreenSegment",

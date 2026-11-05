@@ -1,9 +1,9 @@
-"""One interaction, end to end: record, transcribe, capture, ask, log.
+"""One interaction, end to end: record, transcribe, capture, log.
 
 The coordinator drives the input side only. These tests use doubles for the
-microphone, the transcriber, the screen and the model, so the whole flow can be
-asserted synchronously - and they pin down what the model is given and what it
-answers, which is all that leaves the application.
+microphone, the transcriber and the screen, so the whole flow can be asserted
+synchronously - and they pin down what is logged, which is all that leaves the
+application.
 """
 
 import importlib.util
@@ -17,9 +17,6 @@ from PySide6.QtWidgets import QApplication
 import app.coordinator as coordinator_module
 from app.capture.provider import ScreenCaptureProvider, ScreenCaptureResult
 from app.coordinator import ApplicationCoordinator
-from app.llm.mock_provider import MockVisionLLMProvider
-from app.llm.provider import LLMError, VisionLLMProvider, VisionLLMRequest
-from app.llm.response import HeyArroResponse, ResponseContent, ResponseTone
 from app.transcription.provider import TranscriptionProvider, TranscriptionResult
 
 PNG = b"\x89PNG\r\n\x1a\n"
@@ -123,27 +120,10 @@ class StubCapture(ScreenCaptureProvider):
         )
 
 
-class StubLLM(VisionLLMProvider):
-    """Records the request it was given and answers with fixed text."""
-
-    def __init__(self, text="mock reply", error=None):
-        self._text = text
-        self._error = error
-        self.requests = []
-
-    def process(self, request: VisionLLMRequest) -> HeyArroResponse:
-        self.requests.append(request)
-        if self._error is not None:
-            raise self._error
-        return HeyArroResponse(
-            response=ResponseContent(text=self._text, tone=ResponseTone.NEUTRAL)
-        )
-
-
 # --- harness ----------------------------------------------------------------
 
 
-def build(tmp_path, recorder=None, transcription=None, capture=None, llm=None, pool=None):
+def build(tmp_path, recorder=None, transcription=None, capture=None, pool=None):
     hotkey = FakeHotkey()
     recorder = recorder if recorder is not None else StubRecorder()
     coordinator = ApplicationCoordinator(
@@ -151,7 +131,6 @@ def build(tmp_path, recorder=None, transcription=None, capture=None, llm=None, p
         recorder=recorder,
         transcription=transcription or StubTranscription(),
         capture=capture or StubCapture(),
-        llm=llm or StubLLM(),
         thread_pool=pool if pool is not None else SyncPool(),
         screenshot_dir=tmp_path,
     )
@@ -215,18 +194,16 @@ def test_a_press_while_recording_is_ignored(tmp_path, caplog):
 
 def test_a_press_while_the_question_is_in_flight_is_ignored(tmp_path, caplog):
     """One interaction at a time, so two runs can never interleave in the log."""
-    seen = []
-    llm = StubLLM()
-    hotkey, recorder, coordinator = build(tmp_path, llm=llm)
-    coordinator.error_occurred.connect(seen.append)
-    original = llm.process
+    transcription = StubTranscription()
+    hotkey, recorder, _coordinator = build(tmp_path, transcription=transcription)
+    original = transcription.transcribe
 
-    def process(request):
-        # While the model is being asked, another press arrives.
+    def transcribe(audio_file):
+        # While the question is being processed, another press arrives.
         hotkey.pressed.emit()
-        return original(request)
+        return original(audio_file)
 
-    llm.process = process
+    transcription.transcribe = transcribe
 
     with caplog.at_level(logging.INFO):
         ask(hotkey)
@@ -245,20 +222,7 @@ def test_a_release_without_a_press_is_ignored(tmp_path, caplog):
     assert "nothing is being recorded" in caplog.text
 
 
-# --- what the model is given ------------------------------------------------
-
-
-def test_the_transcript_and_the_screenshot_reach_the_provider(tmp_path):
-    llm = StubLLM()
-    hotkey, _recorder, _coordinator = build(
-        tmp_path, llm=llm, transcription=StubTranscription("how do I export this?")
-    )
-
-    ask(hotkey)
-
-    request = llm.requests[0]
-    assert request.transcript == "how do I export this?"
-    assert request.screenshot == PNG
+# --- what is logged ---------------------------------------------------------
 
 
 def test_the_screenshot_is_saved_for_each_interaction(tmp_path):
@@ -269,27 +233,9 @@ def test_the_screenshot_is_saved_for_each_interaction(tmp_path):
     assert len(list(tmp_path.glob("*.png"))) == 1
 
 
-def test_a_second_question_is_processed_after_the_first(tmp_path):
-    llm = StubLLM()
+def test_the_input_is_logged_and_the_interaction_ends(tmp_path, caplog):
     hotkey, _recorder, coordinator = build(
-        tmp_path, llm=llm, transcription=ScriptedTranscription(["first", "second"])
-    )
-
-    ask(hotkey)
-    assert coordinator.working is False
-
-    ask(hotkey)
-
-    assert [request.transcript for request in llm.requests] == ["first", "second"]
-
-
-# --- what comes back out ----------------------------------------------------
-
-
-def test_the_input_and_the_answer_are_logged(tmp_path, caplog):
-    hotkey, _recorder, coordinator = build(
-        tmp_path, llm=StubLLM(text="It is a window."),
-        transcription=StubTranscription("what is on my screen?"),
+        tmp_path, transcription=StubTranscription("what is on my screen?")
     )
 
     with caplog.at_level(logging.INFO):
@@ -298,32 +244,33 @@ def test_the_input_and_the_answer_are_logged(tmp_path, caplog):
     text = caplog.text
     assert "[Input] transcript: 'what is on my screen?'" in text
     assert "[Input] screenshot: 4x4, 8 bytes, monitor 1" in text
-    assert "[Input] sending to StubLLM" in text
-    assert "[Output] It is a window." in text
+    assert "Interaction complete" in text
     assert coordinator.working is False
 
 
-def test_the_answer_is_only_logged(tmp_path, caplog):
-    """Nothing is retained after the answer: the log is the whole record."""
-    hotkey, _recorder, coordinator = build(tmp_path, llm=StubLLM(text="the answer"))
+def test_a_second_question_is_processed_after_the_first(tmp_path, caplog):
+    hotkey, _recorder, coordinator = build(
+        tmp_path, transcription=ScriptedTranscription(["first", "second"])
+    )
+
+    with caplog.at_level(logging.INFO):
+        ask(hotkey)
+        assert coordinator.working is False
+        ask(hotkey)
+
+    assert caplog.text.index("[Input] transcript: 'first'") < caplog.text.index("[Input] transcript: 'second'")
+    assert caplog.text.count("Interaction complete") == 2
+
+
+def test_no_model_is_asked_for_an_answer(tmp_path, caplog):
+    """The flow ends with the input and its refinement: there is no answer stage."""
+    hotkey, _recorder, _coordinator = build(tmp_path)
 
     with caplog.at_level(logging.INFO):
         ask(hotkey)
 
-    assert "[Output] the answer" in caplog.text
-    assert not hasattr(coordinator, "last_response")
-    assert coordinator.working is False
-
-
-def test_the_coordinator_works_with_any_provider_implementation(tmp_path, caplog):
-    """The mock provider is an offline stand-in for the real one."""
-    llm = MockVisionLLMProvider(delay_seconds=0)
-    hotkey, _recorder, _coordinator = build(tmp_path, llm=llm)
-
-    with caplog.at_level(logging.INFO):
-        ask(hotkey)
-
-    assert "[Output] [mock response]" in caplog.text
+    assert "[Output]" not in caplog.text
+    assert "sending to" not in caplog.text
 
 
 # --- failures ---------------------------------------------------------------
@@ -365,28 +312,17 @@ def test_a_capture_failure_is_reported(tmp_path):
     assert coordinator.working is False
 
 
-def test_a_model_failure_is_reported(tmp_path, caplog):
+def test_the_app_is_ready_again_after_a_failure(tmp_path):
     hotkey, _recorder, coordinator = build(
-        tmp_path, llm=StubLLM(error=LLMError("model exploded"))
+        tmp_path, capture=StubCapture(error=RuntimeError("capture exploded"))
     )
     errors = watch(coordinator)
 
-    with caplog.at_level(logging.INFO):
-        ask(hotkey)
+    ask(hotkey)
+    ask(hotkey)
 
-    assert errors == ["model exploded"]
+    assert errors == ["capture exploded", "capture exploded"]
     assert coordinator.working is False
-    assert "[Output]" not in caplog.text
-
-
-def test_the_app_is_ready_again_after_a_failure(tmp_path):
-    llm = StubLLM(error=LLMError("model exploded"))
-    hotkey, _recorder, coordinator = build(tmp_path, llm=llm)
-
-    ask(hotkey)
-    ask(hotkey)
-
-    assert len(llm.requests) == 2
 
 
 # --- architecture -----------------------------------------------------------
@@ -399,3 +335,10 @@ def test_there_is_no_state_machine_and_no_output_stage():
     source = Path(coordinator_module.__file__).read_text(encoding="utf-8").lower()
     for forbidden in ("applicationstate", "from app.state", "qwidget", "qpainter", "show_text"):
         assert forbidden not in source
+
+
+def test_the_coordinator_does_not_know_a_model_provider():
+    source = Path(coordinator_module.__file__).read_text(encoding="utf-8")
+
+    assert "app.llm" not in source
+    assert "VisionLLM" not in source

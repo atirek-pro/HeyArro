@@ -2,8 +2,8 @@
 
 Composition root only: it builds the services and hands them to
 ApplicationCoordinator, which drives one interaction at a time. The application
-displays nothing: the question, the screen it was asked about and the answer are
-written to the log.
+displays nothing: the question, the screen it was asked about and the refinement
+of that screen are written to the log.
 """
 
 import logging
@@ -13,10 +13,10 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from app.audio.recorder import RECORDINGS_DIR, Recorder
 from app.capture import create_screen_capture_provider
-from app.config import LLM_PROVIDER, REFINEMENT_DIR, REFINEMENT_ENABLED, SCREENSHOT_DIR
+from app.config import REFINEMENT_DIR, REFINEMENT_ENABLED, SCREENSHOT_DIR
 from app.coordinator import ApplicationCoordinator
 from app.hotkey.global_hotkey import GlobalHotkey
-from app.llm import UnsupportedProviderError, get_llm_provider
+from app.logging_setup import configure_logging
 from app.refinement import create_refinement_provider, create_segment_selector
 from app.transcription import create_transcription_provider
 from app.ui.tray import Tray
@@ -24,37 +24,23 @@ from app.ui.tray import Tray
 logger = logging.getLogger(__name__)
 
 
-def _status_text(transcription, capture, llm):
+def _status_text(transcription, capture):
     return (
         "Hey Arro is running in the background.\n\n"
         "Global hotkey: Ctrl + Alt (hold it while you ask)\n"
         f"Speech to text: {type(transcription).__name__}\n"
         f"Screen capture: {type(capture).__name__}\n"
-        f"Provider: {LLM_PROVIDER} ({type(llm).__name__}, model: {getattr(llm, 'model', 'n/a')})\n"
         f"Recordings: {RECORDINGS_DIR}\n"
         f"Screenshots: {SCREENSHOT_DIR}\n"
         f"Screen segments: {REFINEMENT_DIR if REFINEMENT_ENABLED else 'disabled'}\n\n"
         "Hold Ctrl + Alt, ask your question out loud, then release. "
-        "What was asked, what was on screen and what the model answered are "
+        "What was asked, what was on screen and which parts of it matter are "
         "written to the log."
     )
 
 
-def _select_llm_provider():
-    """Build the configured provider, keeping the app alive if it is misconfigured."""
-    try:
-        return get_llm_provider()
-    except UnsupportedProviderError as exc:
-        logger.error("%s", exc)
-        logger.error("Falling back to the mock provider so the application keeps running")
-        return get_llm_provider("mock")
-
-
 def main():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    configure_logging()
 
     app = QApplication(sys.argv)
     app.setApplicationName("Hey Arro")
@@ -64,24 +50,21 @@ def main():
     recorder = Recorder()
     transcription = create_transcription_provider()
     capture = create_screen_capture_provider()
-    llm = _select_llm_provider()
     refinement = create_refinement_provider() if REFINEMENT_ENABLED else None
-    # Selection calls Gemini, so the offline mock provider skips it.
-    segment_selector = create_segment_selector() if refinement and LLM_PROVIDER == "gemini" else None
+    segment_selector = create_segment_selector() if refinement else None
 
     coordinator = ApplicationCoordinator(
         hotkey=hotkey,
         recorder=recorder,
         transcription=transcription,
         capture=capture,
-        llm=llm,
         refinement=refinement,
         segment_selector=segment_selector,
     )
 
     tray = Tray(
         on_status=lambda: QMessageBox.information(
-            None, "Hey Arro", _status_text(transcription, capture, llm)
+            None, "Hey Arro", _status_text(transcription, capture)
         ),
         on_quit=app.quit,
     )
@@ -101,12 +84,6 @@ def main():
             None, "Hey Arro", f"Could not register the global hotkey:\n{exc}"
         )
 
-    logger.info(
-        "Model provider: %s (configured=%s, model=%s)",
-        type(llm).__name__,
-        LLM_PROVIDER,
-        getattr(llm, "model", "n/a"),
-    )
     logger.info(
         "Hey Arro ready - hold Ctrl + Alt to ask (recordings: %s, screenshots: %s)",
         RECORDINGS_DIR,
