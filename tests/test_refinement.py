@@ -26,7 +26,6 @@ from app.refinement.unstructured_provider import UnstructuredRefinementProvider
 from tests.test_coordinator import (
     FakeHotkey,
     StubCapture,
-    StubLLM,
     StubRecorder,
     StubTranscription,
     SyncPool,
@@ -187,42 +186,41 @@ class StubRefinement(ScreenRefinementProvider):
 
 def _build(tmp_path, refinement):
     hotkey = FakeHotkey()
-    llm = StubLLM()
     coordinator = ApplicationCoordinator(
         hotkey=hotkey,
         recorder=StubRecorder(),
         transcription=StubTranscription(),
         capture=StubCapture(),
-        llm=llm,
         thread_pool=SyncPool(),
         screenshot_dir=tmp_path / "plain",
         refinement=refinement,
         refinement_dir=tmp_path / "segments",
     )
-    return hotkey, llm, coordinator
+    return hotkey, coordinator
 
 
-def test_the_screenshot_is_refined_before_the_model_is_asked(tmp_path, caplog):
+def test_the_screenshot_is_refined_before_the_input_is_logged(tmp_path, caplog):
     refinement = StubRefinement()
-    hotkey, llm, _coordinator = _build(tmp_path, refinement)
+    hotkey, coordinator = _build(tmp_path, refinement)
 
     with caplog.at_level(logging.INFO):
         ask(hotkey)
 
     assert len(refinement.captures) == 1
-    assert len(llm.requests) == 1
     assert "Refinement complete: 0 segment(s), strategy=stub" in caplog.text
     assert not (tmp_path / "plain").exists()
     assert caplog.text.index("Refining screenshot") < caplog.text.index("[Input] transcript")
+    assert "Interaction complete" in caplog.text
+    assert coordinator.working is False
 
 
-def test_a_failed_refinement_still_answers_the_question(tmp_path, caplog):
-    hotkey, llm, coordinator = _build(tmp_path, StubRefinement(error=RuntimeError("boom")))
+def test_a_failed_refinement_still_completes_the_interaction(tmp_path, caplog):
+    hotkey, coordinator = _build(tmp_path, StubRefinement(error=RuntimeError("boom")))
 
     with caplog.at_level(logging.INFO):
         ask(hotkey)
 
     assert "Refinement failed, continuing with the plain screenshot: boom" in caplog.text
-    assert len(llm.requests) == 1
+    assert "Interaction complete" in caplog.text
     assert len(list((tmp_path / "plain").glob("*.png"))) == 1
     assert coordinator.working is False

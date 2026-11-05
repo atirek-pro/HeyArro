@@ -51,10 +51,13 @@ def write_segment_manifest(result: RefinementResult) -> Path:
     return _write(folder / MANIFEST_NAME, manifest)
 
 
-def write_relevant_manifest(result: RefinementResult, query, model, scores, seconds) -> Path:
-    """Write ``relevant_ss_manifest.json``: the scored segments, highest score first.
+def write_relevant_manifest(
+    result: RefinementResult, query, model, scores, seconds, response_category, confidence, category_reason
+) -> Path:
+    """Write ``relevant_ss_manifest.json``: the category of the question and the scored segments.
 
-    ``scores`` maps a segment id to its score; segments without a score are left out.
+    ``scores`` maps a segment id to its score; segments without a score are left out,
+    and the rest are listed highest score first.
     """
     folder = Path(result.folder)
     scored = [
@@ -66,6 +69,9 @@ def write_relevant_manifest(result: RefinementResult, query, model, scores, seco
 
     manifest = {
         "query": query,
+        "response_category": response_category,
+        "confidence": confidence,
+        "category_reason": category_reason,
         "model": model,
         "screenshot": Path(result.screenshot_path).name,
         "source_manifest": MANIFEST_NAME,

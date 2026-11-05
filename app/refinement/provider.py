@@ -8,6 +8,7 @@ types, never on a specific document-parsing library.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 
 
 class ScreenRefinementError(RuntimeError):
@@ -62,17 +63,31 @@ class SegmentSelectionError(RuntimeError):
     """Raised when the relevant segments cannot be selected."""
 
 
+class ResponseCategory(str, Enum):
+    """What kind of help a question asks for, given what is on screen."""
+
+    TEACHING = "teaching"
+    INSTRUCTING = "instructing"
+    GUIDING = "guiding"
+    INFORMATIVE = "informative"
+    FALLBACK = "fallback"
+
+
 @dataclass(frozen=True)
 class SelectionResult:
-    """The segments that matter for one question.
+    """The segments that matter for one question, and what kind of help it asks for.
 
     ``scores`` maps a segment id to its score (1-10, higher is more relevant).
+    ``confidence`` (0-1) and ``category_reason`` describe the ``response_category``.
     ``manifest_path`` is the ``relevant_ss_manifest.json`` that was written.
     """
 
     manifest_path: str
     scores: dict[int, int] = field(default_factory=dict)
     seconds: float = 0.0
+    response_category: ResponseCategory = ResponseCategory.FALLBACK
+    confidence: float = 0.0
+    category_reason: str = ""
 
     @property
     def selected_count(self):
@@ -84,4 +99,4 @@ class SegmentSelector(ABC):
 
     @abstractmethod
     def select(self, refinement: RefinementResult, transcript: str) -> SelectionResult:
-        """Score the relevant segments and write ``relevant_ss_manifest.json``."""
+        """Categorise the question, score the relevant segments and write ``relevant_ss_manifest.json``."""

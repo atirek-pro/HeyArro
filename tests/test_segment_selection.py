@@ -13,6 +13,7 @@ import pytest
 from app.coordinator import ApplicationCoordinator
 from app.refinement import (
     RefinementResult,
+    ResponseCategory,
     ScreenRefinementProvider,
     ScreenSegment,
     SegmentSelectionError,
@@ -30,7 +31,6 @@ from app.refinement.unstructured_provider import UnstructuredRefinementProvider
 from tests.test_coordinator import (
     FakeHotkey,
     StubCapture,
-    StubLLM,
     StubRecorder,
     StubTranscription,
     SyncPool,
@@ -70,6 +70,10 @@ class FakeModels:
 def _selector(answer, error=None):
     models = FakeModels(answer, error)
     return GeminiSegmentSelector(client=SimpleNamespace(models=models), model="fake-model"), models
+
+
+def _answer(segments, category="instructing", confidence=0.9, reason="The user wants to do a task."):
+    return {"response_category": category, "confidence": confidence, "reason": reason, "segments": segments}
 
 
 # --- ss_segment_manifest.json -----------------------------------------------
@@ -115,11 +119,16 @@ def test_a_manifest_that_cannot_be_written_does_not_fail_refinement(tmp_path, mo
 def test_the_relevant_manifest_keeps_scored_segments_highest_first(tmp_path):
     refinement = _refinement(tmp_path)
 
-    path = write_relevant_manifest(refinement, "how many folders?", "fake-model", {1: 3, 2: 10}, 1.23456)
+    path = write_relevant_manifest(
+        refinement, "where is it?", "fake-model", {1: 3, 2: 10}, 1.23456, "guiding", 0.8, "It asks where."
+    )
 
     assert path.name == RELEVANT_MANIFEST_NAME
     manifest = json.loads(path.read_text(encoding="utf-8"))
-    assert manifest["query"] == "how many folders?"
+    assert manifest["query"] == "where is it?"
+    assert manifest["response_category"] == "guiding"
+    assert manifest["confidence"] == 0.8
+    assert manifest["category_reason"] == "It asks where."
     assert manifest["model"] == "fake-model"
     assert manifest["source_manifest"] == MANIFEST_NAME
     assert (manifest["total_segments"], manifest["selected_count"]) == (3, 2)
@@ -141,7 +150,7 @@ def test_the_full_manifest_lists_every_segment(tmp_path):
 
 
 def test_the_selector_scores_segments_and_writes_the_manifest(tmp_path):
-    selector, models = _selector({"segments": [{"segment_id": 2, "score": 10}, {"segment_id": 1, "score": 4}]})
+    selector, models = _selector(_answer([{"segment_id": 2, "score": 10}, {"segment_id": 1, "score": 4}]))
 
     result = selector.select(_refinement(tmp_path), "how many folders?")
 
@@ -160,15 +169,15 @@ def test_the_selector_scores_segments_and_writes_the_manifest(tmp_path):
 
 def test_unknown_ids_are_dropped_and_scores_are_clamped(tmp_path):
     selector, _models = _selector(
-        {
-            "segments": [
+        _answer(
+            [
                 {"segment_id": 99, "score": 9},
                 {"segment_id": 1, "score": 50},
                 {"segment_id": 2, "score": 0},
                 {"segment_id": 3, "score": 2},
                 {"segment_id": 3, "score": 6},
             ]
-        }
+        )
     )
 
     result = selector.select(_refinement(tmp_path), "q")
@@ -177,22 +186,61 @@ def test_unknown_ids_are_dropped_and_scores_are_clamped(tmp_path):
 
 
 def test_nothing_relevant_still_writes_an_empty_manifest(tmp_path):
-    selector, _models = _selector({"segments": []})
+    selector, _models = _selector(_answer([], category="fallback", reason="Unrelated to the screen."))
 
     result = selector.select(_refinement(tmp_path), "something unrelated")
 
     assert result.scores == {}
-    assert json.loads((tmp_path / RELEVANT_MANIFEST_NAME).read_text(encoding="utf-8"))["segments"] == []
+    saved = json.loads((tmp_path / RELEVANT_MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert saved["segments"] == []
+    assert saved["response_category"] == "fallback"
 
 
-def test_a_refinement_without_segments_skips_the_model(tmp_path):
-    selector, models = _selector({"segments": []})
-    refinement = RefinementResult(folder=str(tmp_path), screenshot_path=str(tmp_path / "screenshot.png"))
+# --- the response category --------------------------------------------------
 
-    result = selector.select(refinement, "q")
 
-    assert result.scores == {}
-    assert models.calls == []
+@pytest.mark.parametrize("category", ["teaching", "instructing", "guiding", "informative", "fallback"])
+def test_the_category_confidence_and_reason_are_saved_with_the_segments(tmp_path, category):
+    selector, _models = _selector(
+        _answer([{"segment_id": 2, "score": 9}], category=category, confidence=0.75, reason="  Because\nof the verb. ")
+    )
+
+    result = selector.select(_refinement(tmp_path), "q")
+
+    assert result.response_category == ResponseCategory(category)
+    assert (result.confidence, result.category_reason) == (0.75, "Because of the verb.")
+    saved = json.loads((tmp_path / RELEVANT_MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert saved["response_category"] == category
+    assert saved["confidence"] == 0.75
+    assert saved["category_reason"] == "Because of the verb."
+    assert [s["id"] for s in saved["segments"]] == [2]
+
+
+def test_confidence_is_clamped_to_zero_and_one(tmp_path):
+    refinement = _refinement(tmp_path)
+    high, _ = _selector(_answer([], confidence=7))
+    low, _ = _selector(_answer([], confidence=-2))
+
+    assert high.select(refinement, "q").confidence == 1.0
+    assert low.select(refinement, "q").confidence == 0.0
+
+
+def test_an_unknown_category_is_a_selection_error(tmp_path):
+    selector, _models = _selector(_answer([], category="chatting"))
+
+    with pytest.raises(SegmentSelectionError, match="invalid selection"):
+        selector.select(_refinement(tmp_path), "q")
+
+
+def test_the_prompt_defines_every_category():
+    from app.refinement.gemini_selector import SYSTEM_INSTRUCTION
+
+    for category in ResponseCategory:
+        assert f"- {category.value}:" in SYSTEM_INSTRUCTION
+
+    # Counting or reading what is on screen is informative, not a fallback.
+    fallback_definition = SYSTEM_INSTRUCTION.split("- fallback:")[1].split("Tie-breaks")[0]
+    assert "counting" not in fallback_definition and "How many" not in fallback_definition
 
 
 def test_a_malformed_answer_is_a_selection_error(tmp_path):
@@ -241,7 +289,6 @@ class StubSelector(SegmentSelector):
 
 def _build(tmp_path, selector, refinement=True):
     hotkey = FakeHotkey()
-    llm = StubLLM()
     folder = tmp_path / "shot"
     folder.mkdir()
     coordinator = ApplicationCoordinator(
@@ -249,19 +296,18 @@ def _build(tmp_path, selector, refinement=True):
         recorder=StubRecorder(),
         transcription=StubTranscription(text="how many folders?"),
         capture=StubCapture(),
-        llm=llm,
         thread_pool=SyncPool(),
         screenshot_dir=tmp_path / "plain",
         refinement=SegmentedRefinement(folder) if refinement else None,
         refinement_dir=tmp_path / "segments",
         segment_selector=selector,
     )
-    return hotkey, llm, coordinator
+    return hotkey, coordinator
 
 
-def test_segments_are_selected_against_the_transcript_before_the_model_is_asked(tmp_path, caplog):
+def test_segments_are_selected_against_the_transcript_and_the_interaction_ends(tmp_path, caplog):
     selector = StubSelector()
-    hotkey, llm, _coordinator = _build(tmp_path, selector)
+    hotkey, coordinator = _build(tmp_path, selector)
 
     with caplog.at_level(logging.INFO):
         ask(hotkey)
@@ -270,26 +316,30 @@ def test_segments_are_selected_against_the_transcript_before_the_model_is_asked(
     refinement, transcript = selector.calls[0]
     assert transcript == "how many folders?"
     assert refinement.segment_count == 3
-    assert len(llm.requests) == 1
     assert "Segment selection complete: 1 relevant" in caplog.text
-    assert caplog.text.index("Selecting relevant segments") < caplog.text.index("[Input] transcript")
+    assert caplog.text.index("[Input] transcript") < caplog.text.index("Selecting relevant segments")
+    assert caplog.text.index("Segment selection complete") < caplog.text.index("Interaction complete")
+    assert coordinator.working is False
 
 
-def test_a_failed_selection_still_answers_the_question(tmp_path, caplog):
-    hotkey, llm, _coordinator = _build(tmp_path, StubSelector(error=RuntimeError("quota")))
+def test_a_failed_selection_still_completes_the_interaction(tmp_path, caplog):
+    hotkey, coordinator = _build(tmp_path, StubSelector(error=RuntimeError("quota")))
 
     with caplog.at_level(logging.INFO):
         ask(hotkey)
 
-    assert "Segment selection failed, continuing without it: quota" in caplog.text
-    assert len(llm.requests) == 1
+    assert "Segment selection failed: quota" in caplog.text
+    assert "Interaction complete" in caplog.text
+    assert coordinator.working is False
 
 
-def test_without_refinement_there_is_nothing_to_select(tmp_path):
+def test_without_refinement_there_is_nothing_to_select(tmp_path, caplog):
     selector = StubSelector()
-    hotkey, llm, _coordinator = _build(tmp_path, selector, refinement=False)
+    hotkey, coordinator = _build(tmp_path, selector, refinement=False)
 
-    ask(hotkey)
+    with caplog.at_level(logging.INFO):
+        ask(hotkey)
 
     assert selector.calls == []
-    assert len(llm.requests) == 1
+    assert "Interaction complete" in caplog.text
+    assert coordinator.working is False
