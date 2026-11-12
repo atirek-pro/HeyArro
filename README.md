@@ -1,67 +1,195 @@
 # Hey Arro
 
-Hey Arro is a small Windows background assistant for asking a vision model about
-your screen, by voice.
+**A push-to-talk screen assistant for Windows that understands what you are looking at.**
 
-Hold a hotkey, ask a question out loud, and Hey Arro transcribes it locally, takes one
-screenshot, sends both to the model, and writes the answer to the log. There is no
-window, no bubble and no state machine: the log is the interface.
+Hold a hotkey, ask a question out loud about anything on your screen, and Hey Arro works
+out *what kind of help you need*, *which parts of the screen matter*, *how to answer* and
+*exactly where on the screen each part of the answer belongs*.
 
-```
-Ctrl + Alt held      ->  record the microphone
-Ctrl + Alt released  ->  transcribe locally (faster-whisper) + capture the screen
-                     ->  log what is about to be sent
-                     ->  one model call: the question + the screenshot
-                     ->  log the answer
-                     ->  ready for the next question
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-blue)
+![Python](https://img.shields.io/badge/python-3.12-blue)
+![UI](https://img.shields.io/badge/UI-PySide6-41cd52)
+![Status](https://img.shields.io/badge/status-prototype-orange)
+
+> **Project status:** Hey Arro is an early prototype under active development. The
+> understanding half of the pipeline is complete: question, screen segmentation,
+> categorisation, response plan and on-screen coordinates. The answer itself is not
+> generated or shown yet. See [Roadmap](#roadmap-upcoming--pending).
+
+---
+
+## Table of contents
+
+- [How it works](#how-it-works)
+- [Features](#features)
+- [What one interaction produces](#what-one-interaction-produces)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [Project structure](#project-structure)
+- [Architecture](#architecture)
+- [Testing](#testing)
+- [Performance](#performance)
+- [Privacy and data](#privacy-and-data)
+- [Troubleshooting](#troubleshooting)
+- [Roadmap (upcoming / pending)](#roadmap-upcoming--pending)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## How it works
+
+One press of `Ctrl + Alt` is one interaction. Every stage runs off the UI thread, and
+each stage after capture is an isolated step with its own inputs, outputs and failure
+handling.
+
+```mermaid
+flowchart LR
+    A[Hold Ctrl+Alt<br/>and speak] --> B[Record<br/>microphone]
+    B -->|release| C[Transcribe<br/>faster-whisper, local]
+    B -->|release| D[Capture screen<br/>mss]
+    D --> E[Refine<br/>unstructured: segments]
+    C --> F{Join}
+    E --> F
+    F --> G[Select + categorise<br/>Gemini]
+    G -->|fallback| Z[Interaction complete]
+    G -->|teaching / instructing /<br/>guiding / informative| H[Plan the response<br/>Gemini]
+    H --> I[Ground the targets<br/>Gemini: pixel boxes]
+    I --> Z
 ```
 
-The log of one interaction looks like this:
+| # | Stage | What happens | Output |
+|---|---|---|---|
+| 1 | **Record** | Hold `Ctrl + Alt` and speak; release to stop. | 16 kHz mono WAV |
+| 2 | **Transcribe** | faster-whisper transcribes locally, with the language auto-detected. | transcript |
+| 3 | **Capture** | One screenshot of the configured monitor, in parallel with transcription. | PNG |
+| 4 | **Refine** | `unstructured` (hi_res layout + OCR) splits the screenshot into segments such as text blocks, titles, lists, tables and images, and crops each one. | `ss_segment_manifest.json`, `segments/*.png` |
+| 5 | **Select + categorise** | One Gemini call gets the screenshot, the segment manifest and the question. It returns the question's category, a confidence and a reason, plus only the relevant segments, each scored 1-10. | `relevant_ss_manifest.json` |
+| 6 | **Plan** | One Gemini call with a prompt for that category gets the screenshot, the relevant segments and their close-up crops. It returns a plan of ordered steps, not the answer. | `response_plan.json` |
+| 7 | **Ground** | One small Gemini call per plan step, in parallel, finds that step's target on the screenshot and returns a pixel box. | `plan_pointers.json` |
 
-```
-[Input] transcript: 'what is on my screen?'
-[Input] screenshot: 1920x1080, 245579 bytes, monitor 1
-[Input] sending to GeminiVisionProvider (model=gemini-3.8-flash)
-Response [tone=instructional, 268 characters]
-[Output] The main window is a browser playing a video about inference engines...
-```
+### Question categories
+
+| Category | The user wants… | Example |
+|---|---|---|
+| `teaching` | to understand an idea or concept | *"Explain how linear regression works from this video"* |
+| `instructing` | to complete a task step by step | *"How do I export this as a PNG?"* |
+| `guiding` | to find something, or know the next move | *"Where is the export button?"* |
+| `informative` | a fact read from the screen | *"How many folders are on my screen?"* |
+| `fallback` | anything else: small talk, off-screen or unclear | *"Hello, how are you?"* |
+
+A `fallback` question is not planned or grounded.
 
 ---
 
 ## Features
 
-**Push-to-talk, anywhere in Windows**
-Hold `Ctrl + Alt` while Hey Arro is unfocused, speak, release. One interaction per
-press; the next press starts a new one.
+- **Push-to-talk from anywhere.** A global `Ctrl + Alt` hotkey works while Hey Arro is
+  in the background. One interaction runs at a time, and presses during a run are ignored.
+- **Local speech recognition.** Audio is transcribed on your machine with faster-whisper
+  and is never uploaded.
+- **Screen understanding, not just a screenshot.** The screen is split into labelled
+  segments with pixel boxes and OCR text, so later stages can reason about specific
+  regions.
+- **Relevance filtering by an LLM.** A single, small-output call picks the segments that
+  matter for the question. Embeddings, CLIP and a local reranker were evaluated and
+  rejected for accuracy.
+- **Question categorisation.** Teaching, instructing, guiding, informative or fallback,
+  each with a confidence and a reason.
+- **Category-specific response plans.** The plan follows the kind of help asked for. A
+  teaching plan builds understanding one idea at a time; an instructing plan lists one
+  action per step. The full screenshot is the main reference, and segments are only used
+  when they improve the plan.
+- **Grounded coordinates.** Every plan step names its target in words, and a separate
+  step finds it on the screen. When a segment covers the target, the search uses that
+  area, padded, for precision. When no segment covers it, or the crop cut the element
+  short, the search falls back to the whole screenshot. Unusable boxes are rejected,
+  never guessed.
+- **Everything is inspectable.** Each screenshot gets its own folder holding the image,
+  the crops, both manifests, the plan and the pointers. Every stage logs one structured
+  line format: `[time][level]: message`.
+- **Fails soft.** A failed refinement continues with the plain screenshot. A failed
+  selection, plan or grounding is logged and the interaction still completes.
+- **Provider-neutral design.** Each stage depends on an abstract contract
+  (`ScreenRefinementProvider`, `SegmentSelector`, `ResponsePlanner`, `PlanGrounder`). The
+  vendor is chosen in one place.
 
-**Your voice stays on your machine**
-Speech is transcribed locally with faster-whisper (CPU `int8` by default, model size
-configurable, language auto-detected). Audio is never uploaded.
+---
 
-**It asks about what you are looking at**
-One screenshot per question (monitor selectable) is attached to the request, so the
-answer can name the window, the file, the error or the button you are asking about.
+## What one interaction produces
 
-**The answer is logged, not displayed**
-Nothing is drawn, spoken or stored: the answer goes to the log as it arrives, next to
-the input that produced it. That makes the app unobtrusive, and makes what the model
-was given and what it said completely traceable.
+Each question creates a folder under `screen-segments/`:
 
-**One interaction at a time**
-A press is ignored while a recording or a question is still in flight, so two runs can
-never interleave in the log.
+```
+screen-segments/
+└── screenshot-20261112-112429-c375cd/
+    ├── screenshot.png                  the captured screen
+    ├── screenshot_bounding_boxes.png   the segments drawn over it (for inspection)
+    ├── segments/                       one cropped image per segment
+    │   ├── segment-001-title.png
+    │   └── ...
+    ├── ss_segment_manifest.json        every segment: id, kind, OCR text, box, crop file
+    ├── relevant_ss_manifest.json       category, confidence, reason + scored segments
+    ├── response_plan.json              goal, approach, ordered steps, caveats
+    └── plan_pointers.json              a pixel box and centre point for each step
+```
 
-**One model call per question**
-No classification call, no second pass, no follow-up. Press, ask, read the log.
+<details>
+<summary><b>Example: <code>response_plan.json</code> (abridged)</b></summary>
 
-**Runs without any keys at all**
-`LLM_PROVIDER=mock` answers offline from a canned response, so the whole flow can be
-exercised with no API key and no network.
+```json
+{
+  "query": "Where is the search box on this screen?",
+  "response_category": "guiding",
+  "screenshot_size": { "width": 1920, "height": 1080 },
+  "goal": "Point out the search boxes visible on the screen.",
+  "steps": [
+    {
+      "order": 1,
+      "purpose": "Highlight the Windows system search bar on the taskbar.",
+      "target": "the Windows taskbar Search bar, bottom centre next to the Windows start button",
+      "visual_action": "point",
+      "key_points": ["Windows taskbar search bar", "Located near the bottom center"],
+      "segment_ids": [],
+      "targets": []
+    }
+  ],
+  "caveats": []
+}
+```
 
-**Everything is tested**
-112 tests cover the coordination, the prompt and request contract, the answer schema,
-transcription, capture and the hotkey tracker. None of them needs an API key, a
-microphone or a real model.
+`segment_ids` lists the segments that support the step, and `targets` copies their boxes
+from the manifest. An empty list means no segment covers the target. The target is then
+located from the full screenshot in the grounding stage.
+</details>
+
+<details>
+<summary><b>Example: <code>plan_pointers.json</code> (abridged)</b></summary>
+
+```json
+{
+  "plan": "response_plan.json",
+  "screenshot_size": { "width": 1920, "height": 1080 },
+  "pointers": [
+    {
+      "order": 1,
+      "target": "the Windows taskbar Search bar, bottom centre next to the Windows start button",
+      "visual_action": "highlight",
+      "searched": "screenshot",
+      "found": true,
+      "box": { "left": 657, "top": 1027, "width": 278, "height": 44 },
+      "point": { "x": 796, "y": 1049 }
+    }
+  ]
+}
+```
+
+`searched` says where the target was found: `segments` (the padded segment area) or
+`screenshot` (the whole image). A target that cannot be found has `found: false` and no
+box.
+</details>
 
 ---
 
@@ -69,184 +197,317 @@ microphone or a real model.
 
 | | |
 |---|---|
-| OS | Windows 10/11 (the global hotkey is Windows-specific) |
-| Python | 3.12 (developed on 3.12.10) |
-| Hardware | a microphone |
-| Network | needed once to download the Whisper model, and then for the vision model |
-| Key | a personal Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey) - free tier is enough to try it |
+| **OS** | Windows 10 / 11 (the global hotkey is Windows-specific) |
+| **Python** | 3.12 (developed on 3.12.10) |
+| **Tesseract OCR** | Required by `unstructured` for OCR. Install it and make sure `tesseract` is on your `PATH`. |
+| **Hardware** | A microphone |
+| **Network** | To download the Whisper and layout models once, and for every Gemini call |
+| **API key** | A personal Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey) |
+
+Python dependencies (`requirements.txt`): `PySide6`, `keyboard`, `sounddevice`,
+`faster-whisper`, `mss`, `google-genai`, `python-dotenv`, `unstructured[image]`, `pytest`.
 
 ---
 
-## Setup
-
-**1. Get the code**
+## Installation
 
 ```bat
-git clone <your-repo-url> HeyArro
+:: 1. Get the code
+git clone https://github.com/atirek-pro/HeyArro.git
 cd HeyArro
-```
 
-**2. Create a virtual environment**
-
-```bat
+:: 2. Create a virtual environment
 python -m venv heyarro-env
 heyarro-env\Scripts\python.exe -m pip install --upgrade pip
-```
 
-**3. Install the dependencies**
-
-```bat
+:: 3. Install the dependencies
 heyarro-env\Scripts\python.exe -m pip install -r requirements.txt
-```
 
-**4. Configure it**
-
-```bat
+:: 4. Configure it
 copy .env.example .env
 ```
 
-Open `.env` and set your own `GEMINI_API_KEY`. Every other setting already has a
-sensible default, and each one is documented in `.env.example`.
+Open `.env` and set `GEMINI_API_KEY`. Every other setting has a sensible default and is
+documented in `.env.example`.
 
-**5. Run it**
+> **Virtual environment note:** `activate.bat` hard-codes the folder it was created in.
+> If you move or rename the project, activation silently falls back to the system Python
+> (`ModuleNotFoundError: No module named 'PySide6'`). Calling
+> `heyarro-env\Scripts\python.exe` directly, as above, always works.
+
+---
+
+## Usage
+
+Run it from the project root:
 
 ```bat
 heyarro-env\Scripts\python.exe -m app.main
 ```
 
-Run it from the project root so the `app` package is importable. It prints
-`Hey Arro ready - hold Ctrl + Alt to ask` and then keeps running in the background; the
-answers appear in that console, so keep the window visible.
+Hey Arro starts in the system tray and logs to the console. Keep the console open,
+because it is where the results appear.
 
-**6. Use it**
+1. Hold **`Ctrl + Alt`**.
+2. Ask your question out loud.
+3. Release. The stages run and log their results. The files appear in
+   `screen-segments/<screenshot folder>/`.
 
-Hold `Ctrl + Alt`, ask your question out loud, release, and read the answer in the
-log. The tray icon shows a status summary and quits the app.
+The tray icon shows a status summary and quits the app. Errors that end an interaction
+are also shown as a tray notification.
 
-### A note on the virtual environment
+### Example log (abridged)
 
-`heyarro-env\Scripts\activate.bat` hard-codes the absolute path of the environment it
-was created in. If you ever move or rename the folder, activation silently breaks and
-`python` falls back to your system interpreter - which then fails with
-`ModuleNotFoundError: No module named 'PySide6'`. Either delete and recreate the
-environment, or simply call the interpreter directly, as every command above does.
+```text
+[11:25:13][INFO]: Recording available at C:\...\clicky-recordings\recording.wav
+[11:25:13][INFO]: [Refinement] done in 12.41s: 44 segment(s) ...
+[11:25:14][INFO]: [Input] transcript: 'Where is the search box on this screen?'
+[11:25:14][INFO]: [Input] screenshot: 1920x1080, 245427 bytes, monitor 1, saved to ...
+[11:25:16][INFO]: [Selection] category=guiding (confidence 0.95): The user is asking for the location of an interactive element on the screen.
+[11:25:16][INFO]: Segment selection complete: 2 relevant, 3.85s, manifest=...\relevant_ss_manifest.json
+[11:25:22][INFO]: [Plan] step 1: Highlight the Windows system search bar on the taskbar. (point, segments [])
+[11:25:22][INFO]: Response plan complete: 2 step(s), 5.43s, plan=...\response_plan.json
+[11:25:27][INFO]: Plan grounding complete: 2 of 2 located, 4.90s, pointers=...\plan_pointers.json
+[11:25:27][INFO]: Interaction complete
+```
 
 ---
 
 ## Configuration
 
-All settings live in `.env` (see `.env.example` for the annotated list). Real
-environment variables win over the file, so a one-off run can override anything:
+All settings live in `.env`. A real environment variable always wins over the file, so
+a one-off run can override anything:
 
 ```bat
-set LLM_PROVIDER=mock && heyarro-env\Scripts\python.exe -m app.main
+set PLAN_GROUNDING_ENABLED=false && heyarro-env\Scripts\python.exe -m app.main
 ```
 
-| Setting | Default | What it does |
+**Gemini**
+
+| Setting | Default | Description |
 |---|---|---|
-| `LLM_PROVIDER` | `gemini` | `gemini` for real answers, `mock` for an offline echo |
-| `GEMINI_API_KEY` | *(empty)* | your personal key - the only secret the app needs |
-| `GEMINI_MODEL` | `gemini-3.8-flash` | any vision-capable model your account can use |
-| `WHISPER_MODEL_SIZE` | `base` | `tiny`…`large-v3`; bigger is slower but more accurate |
-| `SCREENSHOT_MONITOR` | `1` | which monitor to capture (`0` = all combined) |
-| `GEMINI_TIMEOUT_SECONDS` | `60` | how long to wait before reporting a failure |
+| `GEMINI_API_KEY` | *(empty)* | Your personal key, and the only secret the app needs. It is never logged. |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | The default model for every Gemini stage |
+| `GEMINI_TIMEOUT_SECONDS` | `60` | How long to wait for a Gemini call before it fails |
 
-Every name also accepts a `CLICKY_`-prefixed alias from the original prototype.
+**Speech to text (local)**
 
-### Running it without a key
+| Setting | Default | Description |
+|---|---|---|
+| `WHISPER_MODEL_SIZE` | `base` | `tiny` … `large-v3`; bigger is slower but more accurate |
+| `WHISPER_DEVICE` | `cpu` | `cpu` or `cuda` |
+| `WHISPER_COMPUTE_TYPE` | `int8` | `int8` for CPU, `float16` for CUDA |
+| `WHISPER_LANGUAGE` | *(auto)* | Pin a language (`en`, `de`, …) or leave empty to detect it |
 
-`LLM_PROVIDER=mock` runs the whole flow offline with a canned answer, which is the
-quickest way to check the hotkey, the microphone, the capture and the logging.
+**Screen capture and refinement**
 
-## Tests
+| Setting | Default | Description |
+|---|---|---|
+| `SCREENSHOT_MONITOR` | `1` | `0` = all monitors combined, `1` = primary, `2+` = the others |
+| `SCREENSHOT_DIR` | `%TEMP%\clicky-screenshots` | Used only when refinement is off or fails |
+| `REFINEMENT_ENABLED` | `true` | Split each screenshot into segments |
+| `REFINEMENT_DIR` | `./screen-segments` | Parent folder for the per-screenshot folders |
+| `REFINEMENT_STRATEGY` | `hi_res` | `hi_res` (layout model + OCR) · `ocr_only` · `auto` |
+| `REFINEMENT_LANGUAGES` | *(default)* | Tesseract language codes, comma separated |
+| `REFINEMENT_MIN_SEGMENT_PIXELS` | `16` | Smaller segments are dropped as noise |
 
-```bat
-heyarro-env\Scripts\python.exe -m pytest -q
-```
+**Selection, planning and grounding**
 
-No API key, microphone or model download is required.
+| Setting | Default | Description |
+|---|---|---|
+| `SEGMENT_SELECTION_ENABLED` | `true` | Categorise the question and score the segments |
+| `SEGMENT_SELECTION_MODEL` | *(GEMINI_MODEL)* | Model for selection |
+| `SEGMENT_SELECTION_THINKING_BUDGET` | `0` | Thinking tokens: `0` = none (fastest), `-1` = model default |
+| `RESPONSE_PLANNING_ENABLED` | `true` | Write a response plan for planned categories |
+| `RESPONSE_PLANNING_MODEL` | *(GEMINI_MODEL)* | Model for planning |
+| `RESPONSE_PLANNING_THINKING_BUDGET` | `1024` | Thinking tokens for the planner |
+| `PLAN_GROUNDING_ENABLED` | `true` | Locate each plan step's target on the screenshot |
+| `PLAN_GROUNDING_MODEL` | *(GEMINI_MODEL)* | Model for grounding |
+| `PLAN_GROUNDING_THINKING_BUDGET` | `0` | Thinking tokens for grounding |
+
+Each stage needs the one before it. Without `GEMINI_API_KEY`, the flow still records,
+transcribes, captures and refines, and then stops.
+
+> `LLM_PROVIDER`, `MOCK_LLM_DELAY_SECONDS` and `MAX_SCREENSHOT_BYTES` belong to the earlier answer stage. They
+> are still read but no longer used by the flow; see [Roadmap](#roadmap-upcoming--pending).
+> Every setting also accepts a `CLICKY_`-prefixed alias from the original prototype.
 
 ---
 
-## Project layout
+## Project structure
 
 ```
 app/
-  main.py             composition root: builds the services, the hotkey and the tray
-  config.py           every setting, read from .env / the environment
-  coordinator.py      drives one interaction: record, transcribe, capture, ask, log
-  pipeline.py         pairs the transcript with the screenshot of one interaction
-  audio/              microphone recording (sounddevice) -> 16 kHz WAV
-  hotkey/             global Ctrl + Alt detection
-  transcription/      provider contract + local faster-whisper implementation
-  capture/            provider contract + mss screen capture
-  llm/                the provider contract, the request and answer schema,
-                      the prompt, workers (gemini + mock; openai/claude placeholders)
-  ui/                 the tray icon (status and quit) - the only UI left
-tests/                behaviour, no keys or hardware required
+├── main.py              composition root: builds every service, the hotkey and the tray
+├── coordinator.py       drives one interaction and decides WHEN each stage runs
+├── pipeline.py          joins the transcript and the screenshot of one interaction
+├── config.py            every setting, read from .env / the environment
+├── logging_setup.py     the [time][level]: message log format
+├── hotkey/              global Ctrl + Alt detection
+├── audio/               microphone recording (sounddevice) -> 16 kHz WAV
+├── transcription/       contract + local faster-whisper provider
+├── capture/             contract + mss screen capture
+├── refinement/          contract, unstructured segmentation, manifests,
+│                        Gemini segment selection + categorisation
+├── planner/             contract, per-category prompts, Gemini response planner
+├── grounding/           contract, Gemini target -> pixel-box grounding
+├── llm/                 earlier answer stage (kept, not wired into the flow)
+└── ui/                  the tray icon (status, quit, error notifications)
+tests/                   behaviour tests; no key, microphone or model needed
+sample_refinement.py     stand-alone script that draws the segments of one screenshot
 ```
-
-The layers do not leak into each other: only the Gemini module knows about the Gemini
-SDK, only the coordinator owns the lifecycle, only the prompt module writes prompt
-text, and the application never renders the answer.
 
 ---
 
-## Where your data goes
+## Architecture
 
-- **Audio** is written to `%TEMP%\clicky-recordings` and transcribed locally. It is
-  never uploaded.
-- **One screenshot per question** is written to `%TEMP%\clicky-screenshots` and **is
-  sent to the configured vision provider** (Gemini) with your question. If you would
-  rather not send screenshots anywhere, use `LLM_PROVIDER=mock`.
-- **Memory:** each interaction is independent. The answer is logged and dropped: no
-  history, no account, no profile, no telemetry.
-- Both folders hold ordinary files you can delete at any time.
+- **The coordinator owns the lifecycle, and services own the work.** `ApplicationCoordinator`
+  decides *when* each stage runs. No Whisper, mss, `unstructured` or Gemini code lives in
+  it.
+- **Contracts first.** Every stage is an abstract base class with a result dataclass:
+  `TranscriptionProvider`, `ScreenCaptureProvider`, `ScreenRefinementProvider`,
+  `SegmentSelector`, `ResponsePlanner`, `PlanGrounder`. Vendors are chosen in one factory
+  per package (`create_*()`).
+- **Workers keep the UI responsive.** Every slow call runs in a `QRunnable` on a
+  `QThreadPool` and reports back through Qt signals.
+- **Files are the hand-off between stages.** Selection writes `relevant_ss_manifest.json`,
+  planning reads it and writes `response_plan.json`, and grounding reads that and writes
+  `plan_pointers.json`. Each stage can be re-run or inspected on its own.
+- **The model never invents coordinates in the plan.** The planner names segment ids, and
+  their boxes are copied from the manifest in code. Grounding converts Gemini's 0-1000
+  boxes to pixels, clamps them, and rejects unusable ones.
+- **Structured, schema-validated output.** Every Gemini call uses a JSON response schema
+  validated with pydantic. Unknown ids are dropped, and scores and confidences are clamped.
+
+---
+
+## Testing
+
+```bat
+heyarro-env\Scripts\python.exe -m pytest tests -q --ignore=tests/test_llm_providers.py
+```
+
+The suite (159 tests) uses fakes for the microphone, Whisper, the screen, `unstructured`
+and the Gemini SDK, so it needs no API key, hardware or model download.
+
+`tests/test_llm_providers.py` belongs to the unwired `app/llm` package and currently
+fails to import a removed module, which is why it is excluded above.
+
+---
+
+## Performance
+
+Each Gemini stage is one round trip. These are measured samples on one machine with
+`gemini-3.8-flash`, not benchmarks:
+
+| Stage | Observed |
+|---|---|
+| Refinement (`unstructured`, hi_res) | ~10-16 s per screenshot |
+| Selection + categorisation | ~2.5-4 s |
+| Planning | ~3.5-9.5 s (grows with the number of segment crops) |
+| Grounding (parallel, per plan) | ~4.5-7 s |
+
+Most of the time goes to refinement. Gemini latency is driven mainly by output tokens,
+which is why selection returns only ids and scores, and the plan carries short key
+points rather than prose.
+
+---
+
+## Privacy and data
+
+- **Audio** is written to `%TEMP%\clicky-recordings` and transcribed locally. It is never
+  uploaded.
+- **Screenshots** are saved in `screen-segments/`. With a Gemini key configured, **the
+  screenshot, the crops of the relevant segments and your transcript are sent to
+  Google's Gemini API** during selection, planning and grounding.
+- **Text on the screen is passed to the model as data.** The grounding prompt tells the
+  model to treat on-screen text as content, never instructions.
+- **No memory.** Each interaction is independent: no history, no account, no telemetry.
+  All outputs are ordinary files you can delete at any time.
 
 ---
 
 ## Troubleshooting
 
 **`ModuleNotFoundError: No module named 'PySide6'`**
-You are running the system Python rather than the environment. Use
-`heyarro-env\Scripts\python.exe -m app.main` from the project root (see the note on
-virtual environments above).
+You are running the system Python. Use `heyarro-env\Scripts\python.exe -m app.main` from
+the project root.
 
-**Holding Ctrl + Alt does nothing**
-The global hotkey installs a low-level keyboard hook; some machines require the app to
-run elevated for that. Check the tray status first, and try running the terminal as
-administrator. A GPU driver that also uses `Ctrl + Alt` (screen rotation, for example)
-can swallow the combination.
+**Holding `Ctrl + Alt` does nothing**
+The hotkey uses a low-level keyboard hook, and some machines require an elevated
+terminal. A GPU driver shortcut that also uses `Ctrl + Alt` can swallow the combination.
 
-**Nothing appears in the log**
-The console must stay open: `logging` writes to it. If the tray shows a warning, the
-reason is in the log line just before it.
+**Refinement fails with a Tesseract error**
+Install Tesseract OCR and make sure `tesseract --version` works in the same terminal.
+The interaction still continues with the plain screenshot.
+
+**Python crashes (access violation) while importing `unstructured` in Git Bash**
+`libmagic`'s DLL fails to load under Git Bash. Run the app or scripts from PowerShell or
+`cmd` instead.
 
 **`GEMINI_API_KEY is not set` in the log**
-Every question fails with a clear message until it is configured. Put your key in
-`.env` and restart.
+Selection, planning and grounding are disabled until the key is set in `.env`. Restart
+after setting it.
 
-**The first question takes a while**
-The Whisper model is downloaded once on first use, and each answer is one round trip to
-the model (measured at roughly 10-15 s with `gemini-3.8-flash`).
+**The first question is slow**
+The Whisper and layout models are downloaded on first use.
 
 ---
 
-## Status and limitations
+## Roadmap (upcoming / pending)
 
-- A prototype, run from source: there is no installer, no packaging and no
-  auto-update.
-- Windows only, because of the global hotkey.
-- The application displays nothing by design: the answer is written to the log, which
-  is why the launcher has to keep its console open.
-- Earlier versions spoke the answer, drew a pointer and highlights over the screen,
-  showed a bubble next to the cursor, tracked an application state machine and adapted
-  the depth of the explanation. Those stages have all been removed.
-- The OpenAI and Claude providers are registered placeholders that report "not
-  implemented yet".
-- No clicking, typing or other computer-use: Hey Arro only reads the screen.
+> This section is for project reference and tracks what is planned next.
+
+### Next in the flow
+
+- [ ] **Final response generation.** One LLM call turns the plan and its pointers into the
+      answer: one or more sentences per plan step, each linked to the coordinates it
+      points at or draws on.
+- [ ] **Fallback answer.** A constant default reply for `fallback` questions, asking the
+      user to rephrase as a teaching, instructing, guiding or informative question. It
+      needs no LLM call.
+- [ ] **Interactive overlay.** Draw the pointer, circle, underline, arrow, highlight or
+      drawing for each sentence on screen, in sync with the response, for an interactive
+      learning experience.
+- [ ] **Screen coordinate mapping.** Convert screenshot pixels to screen coordinates,
+      including the monitor offset and display scaling, before anything is drawn.
+
+### Hardening and quality
+
+- [ ] Tell the planner prompt to treat on-screen text and the transcript as data (prompt
+      injection). The grounding prompt already does.
+- [ ] Validate each plan against its category, for example the step count for
+      `guiding` and `informative`.
+- [ ] Live evaluation across more screen types (video players, design tools, IDEs, dense
+      UIs), at least one question per category.
+- [ ] Add saved real Gemini responses as test fixtures, so a change in response shape is
+      caught.
+- [ ] Measure and reduce end-to-end latency, especially refinement and planning with many
+      crops.
+- [ ] Confirm the planner's thinking budget is honoured and worth its latency.
+
+### Housekeeping
+
+- [ ] Remove or rework the unwired `app/llm` package, `LLM_PROVIDER` and
+      `tests/test_llm_providers.py`.
+- [ ] Add a license.
+- [ ] Packaging and an installer. Hey Arro is currently run from source.
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome. Before opening a PR:
+
+1. Keep each stage behind its contract. Vendor code belongs only in that stage's provider
+   module.
+2. Add or update tests. The suite must pass without an API key, microphone or model
+   download.
+3. Run `heyarro-env\Scripts\python.exe -m pytest tests -q --ignore=tests/test_llm_providers.py`.
+
+---
 
 ## License
 
-No license file is included yet - add one before distributing or publishing this
-project.
+No license has been chosen yet. Until one is added, all rights are reserved by the
+author. Add a `LICENSE` file before distributing or publishing this project.

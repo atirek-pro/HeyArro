@@ -10,10 +10,14 @@ One interaction, end to end:
     screenshot       -> refine it first: segment it into its own folder
     both ready       -> log the input, then categorise the question and score the
                         relevant segments (relevant_ss_manifest.json)
+    segments chosen  -> plan how to respond (response_plan.json), except for a
+                        fallback question
+    plan written     -> locate each step's target on the screenshot
+                        (plan_pointers.json)
 
 There is no state machine, no output stage and no model answer: the interaction
-ends once the input is captured and refined, so everything the application did is
-in the log.
+ends once the response is planned, so everything the application did is in the
+log.
 """
 
 import logging
@@ -24,7 +28,10 @@ from PySide6.QtCore import QObject, QThreadPool, Signal
 from app import config
 from app.capture import save_png
 from app.capture.worker import CaptureWorker
+from app.grounding.worker import GroundingWorker
 from app.pipeline import ProcessingCoordinator
+from app.planner.worker import PlanningWorker
+from app.refinement.provider import ResponseCategory
 from app.refinement.worker import RefinementWorker, SelectionWorker
 from app.transcription.worker import TranscriptionWorker
 
@@ -56,6 +63,8 @@ class ApplicationCoordinator(QObject):
         refinement=None,
         refinement_dir=config.REFINEMENT_DIR,
         segment_selector=None,
+        response_planner=None,
+        plan_grounder=None,
         parent=None,
     ):
         super().__init__(parent)
@@ -72,6 +81,10 @@ class ApplicationCoordinator(QObject):
         self._refinement_dir = refinement_dir
         # Optional: scores which segments matter once the transcript is known.
         self._segment_selector = segment_selector
+        # Optional: plans how to respond once the question's segments are selected.
+        self._response_planner = response_planner
+        # Optional: finds where each step of the plan points on the screenshot.
+        self._plan_grounder = plan_grounder
 
         # One interaction at a time: a press is ignored while a recording or a
         # question is still in flight, so two runs can never interleave in the log.
@@ -271,11 +284,69 @@ class ApplicationCoordinator(QObject):
             selection.seconds,
             selection.manifest_path,
         )
-        self._finish()
+        if self._response_planner is None:
+            self._finish()
+            return
+        if selection.response_category is ResponseCategory.FALLBACK:
+            logger.info("Question is a fallback; no response plan is needed")
+            self._finish()
+            return
+        self._plan_response(selection)
 
     def _on_selection_failed(self, result, message):
         # Selection is an enrichment: a failure ends the interaction, it does not crash it.
         logger.error("Segment selection failed: %s", message)
+        self._finish()
+
+    # --- the response plan --------------------------------------------------
+
+    def _plan_response(self, selection):
+        """Plan how to respond to the question from the selected segments."""
+        logger.info(
+            "Planning a %s response with %s",
+            selection.response_category.value,
+            type(self._response_planner).__name__,
+        )
+        worker = self._track(PlanningWorker(self._response_planner, selection))
+        worker.signals.finished.connect(self._on_planned)
+        worker.signals.failed.connect(self._on_planning_failed)
+        self._thread_pool.start(worker)
+
+    def _on_planned(self, plan):
+        logger.info("Response plan complete: %s step(s), %.2fs, plan=%s", plan.step_count, plan.seconds, plan.plan_path)
+        if self._plan_grounder is None:
+            self._finish()
+            return
+        self._ground_plan(plan)
+
+    def _on_planning_failed(self, message):
+        # Planning is a step of its own: a failure ends the interaction, it does not crash it.
+        logger.error("Response planning failed: %s", message)
+        self._finish()
+
+    # --- the plan's coordinates ---------------------------------------------
+
+    def _ground_plan(self, plan):
+        """Find where each step of the plan points on the screenshot."""
+        logger.info("Locating the plan's targets with %s", type(self._plan_grounder).__name__)
+        worker = self._track(GroundingWorker(self._plan_grounder, plan))
+        worker.signals.finished.connect(self._on_grounded)
+        worker.signals.failed.connect(self._on_grounding_failed)
+        self._thread_pool.start(worker)
+
+    def _on_grounded(self, grounding):
+        logger.info(
+            "Plan grounding complete: %s of %s located, %.2fs, pointers=%s",
+            grounding.located,
+            grounding.total,
+            grounding.seconds,
+            grounding.pointers_path,
+        )
+        self._finish()
+
+    def _on_grounding_failed(self, message):
+        # Grounding is a step of its own: a failure ends the interaction, it does not crash it.
+        logger.error("Plan grounding failed: %s", message)
         self._finish()
 
     # --- failures -----------------------------------------------------------
