@@ -2,7 +2,7 @@
   <img src="docs/assets/heyarro-banner.png" alt="HeyArro" width="640">
   <p><b>A push-to-talk screen assistant for Windows that answers questions about your screen, out loud, and points at what it is talking about.</b></p>
   <p><img src="https://img.shields.io/badge/version-0.1-ff357a?style=for-the-badge" alt="Version 0.1"> <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-ff5a6e?style=for-the-badge&amp;logo=windows&amp;logoColor=white" alt="Platform: Windows 10 | 11"> <img src="https://img.shields.io/badge/python-3.12-ff7a5c?style=for-the-badge&amp;logo=python&amp;logoColor=white" alt="Python 3.12"> <img src="https://img.shields.io/badge/UI-PySide6-ff9a46?style=for-the-badge&amp;logo=qt&amp;logoColor=white" alt="UI: PySide6"></p>
-  <p><a href="#how-it-works">How it works</a> · <a href="#installation">Installation</a> · <a href="#usage">Usage</a> · <a href="#configuration">Configuration</a> · <a href="#troubleshooting">Troubleshooting</a></p>
+  <p><a href="#demo">Demo</a> · <a href="#how-it-works">How it works</a> · <a href="#installation">Installation</a> · <a href="#usage">Usage</a> · <a href="#configuration">Configuration</a> · <a href="#troubleshooting">Troubleshooting</a></p>
 </div>
 
 ---
@@ -19,8 +19,21 @@ mentioned**.
 
 ---
 
+## Demo
+
+https://github.com/user-attachments/assets/21c1158c-661a-4f25-83b1-f90d9d9989be
+
+<p align="center"><a href="HeyArro_DEMO.mp4">Download HeyArro_DEMO.mp4</a></p>
+
+Ask a question with `Ctrl + Alt` held, watch the status pill move from Listening to
+Speaking, and see Hey Arro circle and point at the exact control while it answers. The
+screens in the video are illustrative mock-ups.
+
+---
+
 ## Table of contents
 
+- [Demo](#demo)
 - [How it works](#how-it-works)
 - [The flow, step by step](#the-flow-step-by-step)
 - [Question categories](#question-categories)
@@ -501,7 +514,8 @@ app/
 ├── llm/                 earlier answer stage (kept, not wired into the flow)
 ├── ui/                  tray icon + glass status indicator
 └── assets/              app icon (sunset-tile.ico) used by the tray
-docs/assets/             README banner and icon images
+docs/assets/             README banner image
+HeyArro_DEMO.mp4         22-second demo video
 tests/                   behaviour tests; no key, microphone, voice or model needed
 sample_refinement.py     stand-alone script that draws the segments of one screenshot
 ```
