@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 WORDS_PER_SECOND = 2.6
 MIN_HOLD_SECONDS = 1.5
+# How often, and for how long at most, to wait for a sentence's voice to be ready.
+READY_POLL_MS = 100
+MAX_READY_WAIT_MS = 10_000
 
 
 def reading_ms(text):
@@ -85,14 +88,32 @@ class ResponsePresenter(QObject):
             "on" if self._drawing else "off",
         )
 
+        self._prepare_speech(sentences)
         self.status_changed.emit(AssistantStatus.RESPONDING)
         self._after(self._responding_ms, self._next)
 
+    def _prepare_speech(self, sentences):
+        """Let the voice start making every sentence now, during the Responding pause."""
+        prepare = getattr(self._speech, "prepare", None)
+        if prepare is None:
+            return
+        try:
+            prepare([sentence.get("text", "") for sentence in sentences])
+        except Exception:
+            logger.warning("[Presenting] could not prepare the speech ahead of time", exc_info=True)
+
     # --- one sentence at a time -----------------------------------------------
 
-    def _next(self):
+    def _next(self, waited_ms=0):
         if self._index >= len(self._sentences):
             self._done()
+            return
+
+        # Draw the mark only when its sentence can be heard straight away, so the two
+        # start together; the pill keeps its current status while the voice gets ready.
+        text = self._sentences[self._index].get("text", "")
+        if waited_ms < MAX_READY_WAIT_MS and not self._speech_ready(text):
+            self._after(READY_POLL_MS, lambda: self._next(waited_ms + READY_POLL_MS))
             return
 
         sentence = self._sentences[self._index]
@@ -120,6 +141,15 @@ class ResponsePresenter(QObject):
         worker.signals.finished.connect(lambda: self._on_spoken(worker))
         worker.signals.failed.connect(lambda message: self._on_speech_failed(worker, text, message))
         self._thread_pool.start(worker)
+
+    def _speech_ready(self, text):
+        is_ready = getattr(self._speech, "is_ready", None)
+        if is_ready is None:
+            return True
+        try:
+            return bool(is_ready(text))
+        except Exception:
+            return True
 
     def _on_spoken(self, worker):
         self._workers.discard(worker)

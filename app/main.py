@@ -9,6 +9,7 @@ drawn on the screen; every step is also written to the log.
 import logging
 import sys
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from app.audio.recorder import RECORDINGS_DIR, Recorder
@@ -52,6 +53,59 @@ def _status_text(transcription, capture):
     )
 
 
+VOICE_POLL_MS = 200
+
+
+def when_voice_ready(speech, tray, on_ready, parent=None):
+    """Call ``on_ready`` once ``speech`` has loaded; at once for a voice that needs no loading.
+
+    While the Kokoro model downloads (first run only) or loads, the tray says so and
+    the hotkey is not yet listening, so no question arrives before the voice can answer.
+    If Kokoro cannot load, the Windows voice takes over and Hey Arro starts anyway.
+    """
+    if speech is None or not hasattr(speech, "is_loaded"):
+        on_ready()
+        return None
+
+    downloading = bool(getattr(speech, "needs_download", False))
+    logger.info(
+        "[Speech] %s the voice before accepting questions...",
+        "downloading and loading" if downloading else "loading",
+    )
+    tray.setToolTip("Hey Arro - getting the voice ready...")
+    if downloading:
+        tray.showMessage(
+            "Hey Arro",
+            "Downloading the voice model (about 340 MB, one time only). "
+            "Hey Arro will start listening as soon as it is ready.",
+            QSystemTrayIcon.Information,
+            8000,
+        )
+
+    timer = QTimer(parent)
+    timer.setInterval(VOICE_POLL_MS)
+
+    def check():
+        if not speech.is_loaded():
+            return
+        timer.stop()
+        tray.setToolTip("Hey Arro")
+        error = speech.load_error()
+        if error is not None:
+            logger.error("[Speech] the Kokoro voice could not load (%s); using the Windows voice", error)
+            tray.showMessage(
+                "Hey Arro", "The natural voice could not load; using the Windows voice.", QSystemTrayIcon.Warning, 6000
+            )
+        elif downloading:
+            tray.showMessage("Hey Arro", "Voice ready - hold Ctrl + Alt to ask.", QSystemTrayIcon.Information, 5000)
+        on_ready()
+
+    timer.timeout.connect(check)
+    timer.start()
+    check()
+    return timer
+
+
 def main():
     configure_logging()
 
@@ -69,10 +123,12 @@ def main():
     response_planner = create_response_planner() if segment_selector else None
     plan_grounder = create_plan_grounder() if response_planner else None
     response_composer = create_response_composer() if plan_grounder else None
+    # The voice starts loading here, at startup (and downloads its model if missing).
+    speech = create_speech_provider() if response_composer else None
     response_presenter = (
         ResponsePresenter(
             overlay=ScreenOverlay() if OVERLAY_ENABLED else None,
-            speech=create_speech_provider(),
+            speech=speech,
         )
         if response_composer
         else None
@@ -110,18 +166,22 @@ def main():
 
     tray.show()
 
-    try:
-        hotkey.start()
-    except Exception as exc:  # pragma: no cover - depends on the host
-        QMessageBox.critical(
-            None, "Hey Arro", f"Could not register the global hotkey:\n{exc}"
+    def start_listening():
+        try:
+            hotkey.start()
+        except Exception as exc:  # pragma: no cover - depends on the host
+            QMessageBox.critical(
+                None, "Hey Arro", f"Could not register the global hotkey:\n{exc}"
+            )
+            return
+        logger.info(
+            "Hey Arro ready - hold Ctrl + Alt to ask (recordings: %s, screenshots: %s)",
+            RECORDINGS_DIR,
+            SCREENSHOT_DIR,
         )
 
-    logger.info(
-        "Hey Arro ready - hold Ctrl + Alt to ask (recordings: %s, screenshots: %s)",
-        RECORDINGS_DIR,
-        SCREENSHOT_DIR,
-    )
+    # Questions are accepted only once the voice is ready to answer them.
+    when_voice_ready(speech, tray, start_listening, parent=app)
 
     app.aboutToQuit.connect(coordinator.shutdown)
     app.aboutToQuit.connect(recorder.abort)

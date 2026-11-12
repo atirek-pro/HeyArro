@@ -1,4 +1,7 @@
-"""Speaking the final response aloud with the voice installed on Windows.
+"""Speaking the final response aloud.
+
+Two voices: Kokoro (``kokoro_speech.py``, natural, the default) and the voice
+installed on Windows (below), used when Kokoro is not installed or is switched off.
 
 ``pyttsx3`` (the SAPI5 voice) is imported lazily, so a missing or broken install
 surfaces as a handled SpeechError instead of crashing the application. A fresh
@@ -25,6 +28,16 @@ class SpeechProvider(ABC):
     @abstractmethod
     def speak(self, text):
         """Speak ``text`` and return once it has been said."""
+
+    def prepare(self, texts):
+        """Called with every sentence of an answer before the first is spoken.
+
+        Providers that need time to make speech start on it here; others ignore it.
+        """
+
+    def is_ready(self, text):
+        """True when ``text`` can start playing without a wait."""
+        return True
 
     def stop(self):
         """Interrupt the sentence being spoken, when supported."""
@@ -104,7 +117,25 @@ def _safe_stop(engine):
 
 
 def create_speech_provider() -> SpeechProvider | None:
-    """Build the speech provider, or None when speech is switched off."""
+    """Build the speech provider, or None when speech is switched off.
+
+    ``TTS_PROVIDER=kokoro`` (the default) uses the natural Kokoro voice; when
+    kokoro-onnx is not installed it falls back to the Windows voice.
+    """
     if not config.TTS_ENABLED:
         return None
+    if config.TTS_PROVIDER == "kokoro":
+        try:
+            import kokoro_onnx  # noqa: F401
+        except Exception:
+            logger.warning(
+                "[Speech] kokoro-onnx is not installed (python -m pip install kokoro-onnx); "
+                "using the Windows voice"
+            )
+        else:
+            from app.final_response.kokoro_speech import KokoroSpeechProvider
+
+            return KokoroSpeechProvider()
+    elif config.TTS_PROVIDER != "windows":
+        logger.warning("[Speech] unknown TTS_PROVIDER=%r; using the Windows voice", config.TTS_PROVIDER)
     return WindowsSpeechProvider()

@@ -180,11 +180,26 @@ Hey Arro then copies that step's pointer (box and point) onto the sentence **in 
 the model never writes coordinates. Opening and closing sentences have no pointer.
 
 ### 9. Present: speak and draw
-The status indicator shows **Responding** for 2 seconds. Then, for each sentence:
+The status indicator shows **Responding** for 2 seconds. During that pause the voice starts
+making every sentence of the answer in the background, so each one is ready by the time it
+is spoken. Then, for each sentence:
 
-1. The sentence's **mark** is drawn on the screen at its pointer.
-2. The sentence is **spoken** with the Windows voice.
-3. When the sentence has been said, the next one starts.
+1. Hey Arro waits until the sentence's audio is ready (the indicator keeps its status meanwhile).
+2. The sentence's **mark** is drawn on the screen at its pointer.
+3. The sentence is **spoken** with a natural local voice, **Kokoro-82M** (open source, runs on
+   the CPU). The Windows voice is the fallback.
+4. When the sentence has been said, the next one starts.
+
+Kokoro's model lives in `tts_model/` (`kokoro-v1.0.onnx` and `voices-v1.0.bin`, about
+340 MB). Missing files are downloaded there once, from the official kokoro-onnx release, and
+then used from there. Female voices (`KOKORO_VOICE`): American `af_heart` / `af_bella`,
+British `bf_emma` / `bf_isabella`, Indian `hf_alpha` / `hf_beta`.
+
+The voice gets ready **when Hey Arro starts**, before it accepts any question: it downloads
+the model if `tts_model/` is missing it (the tray says so and the log shows the progress),
+loads it and warms it up, and only then starts listening for `Ctrl + Alt`. With the model in
+place this takes a few seconds; the first download takes about half a minute on a fast
+connection. If Kokoro cannot load, Hey Arro starts anyway with the Windows voice.
 
 The marks are drawn by a transparent, click-through window over the captured monitor.
 Screenshot pixels are converted to screen positions, including display scaling.
@@ -330,7 +345,8 @@ screen-segments/
   segments that miss or cut it off. Boxes are validated, never invented.
 - **A plan-faithful answer.** The final response follows the plan step by step, and
   pointers are attached in code.
-- **Spoken answers** with the offline Windows voice.
+- **Spoken answers** in a natural local voice (Kokoro-82M: American, British or Indian
+  female), with the Windows voice as a fallback.
 - **On-screen marks**, synchronised sentence by sentence and accurate under display scaling.
 - **A live glass status indicator** from the first key press to the last spoken word.
 - **Inspectable.** Every step writes a file into the screenshot's folder and logs in one
@@ -354,7 +370,7 @@ screen-segments/
 | **API key** | A personal Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey) |
 
 Python dependencies (`requirements.txt`): `PySide6`, `keyboard`, `sounddevice`,
-`faster-whisper`, `mss`, `google-genai`, `python-dotenv`, `pyttsx3`, `unstructured[image]`,
+`faster-whisper`, `mss`, `google-genai`, `python-dotenv`, `pyttsx3`, `kokoro-onnx`, `soundfile`, `unstructured[image]`,
 `pytest`.
 
 ---
@@ -477,9 +493,14 @@ All settings live in `.env`. A real environment variable always wins over the fi
 |---|---|---|
 | `RESPONDING_PAUSE_SECONDS` | `2` | How long **Responding** shows before the answer starts |
 | `TTS_ENABLED` | `true` | Speak the answer; when off, each mark stays up for its reading time |
-| `TTS_RATE_WPM` | *(voice default)* | Speaking speed in words per minute |
-| `TTS_VOLUME` | *(unchanged)* | `0.0` - `1.0` |
-| `TTS_VOICE_ID` | *(default voice)* | A SAPI voice id |
+| `TTS_PROVIDER` | `kokoro` | `kokoro` (natural local voice) or `windows` (built-in voice) |
+| `KOKORO_VOICE` | `af_heart` | American `af_heart` / `af_bella`, British `bf_emma` / `bf_isabella`, Indian `hf_alpha` / `hf_beta` |
+| `KOKORO_SPEED` | `1.0` | `0.8` slower, `1.2` faster |
+| `KOKORO_LANG` | *(from the voice)* | Pronunciation: `en-us` or `en-gb` |
+| `KOKORO_MODEL_DIR` | `tts_model/` | Where the Kokoro model lives; missing files are downloaded here |
+| `TTS_RATE_WPM` | *(voice default)* | Windows voice: speaking speed in words per minute |
+| `TTS_VOLUME` | *(unchanged)* | Windows voice: `0.0` - `1.0` |
+| `TTS_VOICE_ID` | *(default voice)* | Windows voice: a SAPI voice id |
 | `OVERLAY_ENABLED` | `true` | Draw the marks on the screen |
 | `STATUS_INDICATOR_ENABLED` | `true` | Show the glass status indicator |
 
@@ -510,7 +531,7 @@ app/
 │                        Gemini segment selection + categorisation
 ├── planner/             per-category prompts + Gemini response planner
 ├── grounding/           Gemini target -> pixel-box grounding
-├── final_response/      Gemini composer, Windows speech, on-screen overlay, presenter
+├── final_response/      Gemini composer, Kokoro + Windows speech, on-screen overlay, presenter
 ├── llm/                 earlier answer stage (kept, not wired into the flow)
 ├── ui/                  tray icon + glass status indicator
 └── assets/              app icon (sunset-tile.ico) used by the tray
@@ -583,7 +604,8 @@ each call asks for compact structured output.
 
 - **Audio** is written to `%TEMP%\clicky-recordings` and transcribed locally. It is never
   uploaded.
-- **The answer is spoken locally** with the Windows voice.
+- **The answer is spoken locally** by Kokoro on your CPU (or the Windows voice). Only the
+  one-time model download uses the network.
 - **Screenshots** are saved in `screen-segments/`. With a Gemini key configured, **the
   screenshot, crops of the relevant segments and your transcript are sent to Google's
   Gemini API** during selection, planning, grounding and composing.
@@ -612,8 +634,15 @@ Install Tesseract OCR and make sure `tesseract --version` works in the same term
 Selection, planning, grounding and the final response are disabled until the key is set.
 
 **No voice**
-Check that a Windows voice is installed (Settings -> Time & language -> Speech) and that
-`TTS_ENABLED=true`. If speech fails, the error is logged and the marks are still shown.
+Check `TTS_ENABLED=true`. With `TTS_PROVIDER=kokoro`, make sure `kokoro-onnx` is installed
+in `heyarro-env` and that `tts_model/` holds both model files (or that the first download
+could reach GitHub); without `kokoro-onnx` the Windows voice is used. If speech fails, the
+error is logged and the marks are still shown.
+
+**A short pause before the first sentence**
+Kokoro makes speech at about real time on a laptop CPU. The first sentence is made during
+the Responding pause; on a slower machine the indicator stays on Responding a moment longer
+so the voice and its mark still start together.
 
 **Marks appear in the wrong place**
 Capture and draw on the same monitor (`SCREENSHOT_MONITOR=1` for the primary). Marks are
