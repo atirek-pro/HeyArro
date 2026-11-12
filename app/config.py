@@ -128,6 +128,41 @@ PLAN_GROUNDING_MODEL = _read("PLAN_GROUNDING_MODEL")
 # Locating an element needs no reasoning: 0 = none (fastest), -1 = the model's own default.
 PLAN_GROUNDING_THINKING_BUDGET = _read("PLAN_GROUNDING_THINKING_BUDGET", 0, int)
 
+# After the plan is grounded, Gemini writes the final response from the plan: the sentences
+# with the pointer of the step each belongs to, saved as final_response.json. Needs grounding.
+FINAL_RESPONSE_ENABLED = (_read("FINAL_RESPONSE_ENABLED", "true") or "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+# Empty = use GEMINI_MODEL.
+FINAL_RESPONSE_MODEL = _read("FINAL_RESPONSE_MODEL")
+# The plan already did the reasoning: 0 = none (fastest), -1 = the model's own default.
+FINAL_RESPONSE_THINKING_BUDGET = _read("FINAL_RESPONSE_THINKING_BUDGET", 0, int)
+
+# --- presenting the final response ------------------------------------------
+
+# How long the indicator says "Responding" before the first sentence is spoken.
+RESPONDING_PAUSE_SECONDS = _read("RESPONDING_PAUSE_SECONDS", 2.0, float)
+# Speak each sentence with the Windows voice (pyttsx3). Off = the marks are still drawn.
+TTS_ENABLED = (_read("TTS_ENABLED", "true") or "true").strip().lower() not in ("0", "false", "no", "off")
+# Words per minute; None keeps the voice's own speed.
+TTS_RATE_WPM = _read("TTS_RATE_WPM", None, int)
+# 0.0 - 1.0; None keeps the system volume.
+TTS_VOLUME = _read("TTS_VOLUME", None, float)
+# A SAPI voice id; empty uses the default Windows voice.
+TTS_VOICE_ID = _read("TTS_VOICE_ID")
+# Draw each sentence's mark (point, circle, highlight...) over the screen.
+OVERLAY_ENABLED = (_read("OVERLAY_ENABLED", "true") or "true").strip().lower() not in ("0", "false", "no", "off")
+# The glass pill at the top of the screen showing Listening, Transcribing, Refining...
+STATUS_INDICATOR_ENABLED = (_read("STATUS_INDICATOR_ENABLED", "true") or "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+
 # --- vision LLM provider ----------------------------------------------------
 
 # "gemini" (real), "mock" (offline echo), "openai" / "claude" (placeholders).
