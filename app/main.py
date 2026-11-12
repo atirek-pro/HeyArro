@@ -17,6 +17,8 @@ from app.config import REFINEMENT_DIR, REFINEMENT_ENABLED, SCREENSHOT_DIR
 from app.coordinator import ApplicationCoordinator
 from app.hotkey.global_hotkey import GlobalHotkey
 from app.logging_setup import configure_logging
+from app.grounding import create_plan_grounder
+from app.planner import create_response_planner
 from app.refinement import create_refinement_provider, create_segment_selector
 from app.transcription import create_transcription_provider
 from app.ui.tray import Tray
@@ -52,6 +54,8 @@ def main():
     capture = create_screen_capture_provider()
     refinement = create_refinement_provider() if REFINEMENT_ENABLED else None
     segment_selector = create_segment_selector() if refinement else None
+    response_planner = create_response_planner() if segment_selector else None
+    plan_grounder = create_plan_grounder() if response_planner else None
 
     coordinator = ApplicationCoordinator(
         hotkey=hotkey,
@@ -60,6 +64,8 @@ def main():
         capture=capture,
         refinement=refinement,
         segment_selector=segment_selector,
+        response_planner=response_planner,
+        plan_grounder=plan_grounder,
     )
 
     tray = Tray(

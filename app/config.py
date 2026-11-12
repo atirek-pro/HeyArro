@@ -102,6 +102,32 @@ SEGMENT_SELECTION_MODEL = _read("SEGMENT_SELECTION_MODEL")
 # model's own default.
 SEGMENT_SELECTION_THINKING_BUDGET = _read("SEGMENT_SELECTION_THINKING_BUDGET", 0, int)
 
+# After the segments are selected, Gemini plans how to respond (not the answer itself) and
+# the result is saved as response_plan.json next to the manifests. Needs segment selection.
+RESPONSE_PLANNING_ENABLED = (_read("RESPONSE_PLANNING_ENABLED", "true") or "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+# Empty = use GEMINI_MODEL.
+RESPONSE_PLANNING_MODEL = _read("RESPONSE_PLANNING_MODEL")
+# Planning benefits from a little thinking: 0 = none (fastest), -1 = the model's own default.
+RESPONSE_PLANNING_THINKING_BUDGET = _read("RESPONSE_PLANNING_THINKING_BUDGET", 1024, int)
+
+# After the plan is written, Gemini finds where each step's target is on the screenshot and
+# the result is saved as plan_pointers.json next to the plan. Needs response planning.
+PLAN_GROUNDING_ENABLED = (_read("PLAN_GROUNDING_ENABLED", "true") or "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+# Empty = use GEMINI_MODEL.
+PLAN_GROUNDING_MODEL = _read("PLAN_GROUNDING_MODEL")
+# Locating an element needs no reasoning: 0 = none (fastest), -1 = the model's own default.
+PLAN_GROUNDING_THINKING_BUDGET = _read("PLAN_GROUNDING_THINKING_BUDGET", 0, int)
+
 # --- vision LLM provider ----------------------------------------------------
 
 # "gemini" (real), "mock" (offline echo), "openai" / "claude" (placeholders).
