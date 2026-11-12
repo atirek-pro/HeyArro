@@ -32,7 +32,7 @@ from app.planner import create_response_planner
 from app.refinement import create_refinement_provider, create_segment_selector
 from app.transcription import create_transcription_provider
 from app.ui.status_indicator import StatusIndicator
-from app.ui.tray import Tray
+from app.ui.tray import Tray, app_icon
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName("Hey Arro")
+    app.setWindowIcon(app_icon())
     app.setQuitOnLastWindowClosed(False)
 
     hotkey = GlobalHotkey(keys=("ctrl", "alt"))
