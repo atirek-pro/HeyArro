@@ -1,12 +1,16 @@
 """System tray icon and its menu."""
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
+ICON_PATH = Path(__file__).resolve().parent.parent / "assets" / "sunset-tile.ico"
 
-def _build_icon():
-    """Draw a simple dot icon so no external asset file is needed."""
+
+def _draw_fallback_icon():
+    """A plain green dot, used only when the icon file is missing."""
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.transparent)
 
@@ -20,12 +24,21 @@ def _build_icon():
     return QIcon(pixmap)
 
 
+def app_icon():
+    """The Hey Arro icon from app/assets, or the drawn dot if the file is missing."""
+    if ICON_PATH.is_file():
+        icon = QIcon(str(ICON_PATH))
+        if not icon.isNull():
+            return icon
+    return _draw_fallback_icon()
+
+
 class Tray(QSystemTrayIcon):
     """Tray icon exposing the Show Status and Quit actions."""
 
     def __init__(self, on_status, on_quit):
-        super().__init__(_build_icon())
-        self.setToolTip("Clicky Assistant")
+        super().__init__(app_icon())
+        self.setToolTip("Hey Arro")
 
         menu = QMenu()
 

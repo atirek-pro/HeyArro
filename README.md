@@ -1,18 +1,17 @@
-# Hey Arro
+<div align="center">
+  <img src="docs/assets/heyarro-banner.png" alt="HeyArro" width="640">
+  <p><b>A push-to-talk screen assistant for Windows that answers questions about your screen, out loud, and points at what it is talking about.</b></p>
+  <p><img src="https://img.shields.io/badge/version-0.1-ff357a?style=for-the-badge" alt="Version 0.1"> <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-ff5a6e?style=for-the-badge&amp;logo=windows&amp;logoColor=white" alt="Platform: Windows 10 | 11"> <img src="https://img.shields.io/badge/python-3.12-ff7a5c?style=for-the-badge&amp;logo=python&amp;logoColor=white" alt="Python 3.12"> <img src="https://img.shields.io/badge/UI-PySide6-ff9a46?style=for-the-badge&amp;logo=qt&amp;logoColor=white" alt="UI: PySide6"></p>
+  <p><a href="#how-it-works">How it works</a> · <a href="#installation">Installation</a> · <a href="#usage">Usage</a> · <a href="#configuration">Configuration</a> · <a href="#troubleshooting">Troubleshooting</a></p>
+</div>
 
-**A push-to-talk screen assistant for Windows that answers questions about your screen,
-out loud, and points at what it is talking about.**
+---
 
 Hold `Ctrl + Alt`, ask a question about anything on your screen, and release. Hey Arro
 works out what kind of help you need and which parts of the screen matter. It plans the
 answer, finds each thing it will refer to on the screen, then **speaks the answer while
 drawing a pointer, circle, underline, arrow or highlight on each element as it is
 mentioned**.
-
-![Version](https://img.shields.io/badge/version-0.1-blue)
-![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-blue)
-![Python](https://img.shields.io/badge/python-3.12-blue)
-![UI](https://img.shields.io/badge/UI-PySide6-41cd52)
 
 > **Version 0.1.** The first complete end-to-end release: question, screen understanding,
 > categorisation, response plan, on-screen coordinates, spoken answer and on-screen marks,
@@ -500,7 +499,9 @@ app/
 ├── grounding/           Gemini target -> pixel-box grounding
 ├── final_response/      Gemini composer, Windows speech, on-screen overlay, presenter
 ├── llm/                 earlier answer stage (kept, not wired into the flow)
-└── ui/                  tray icon + glass status indicator
+├── ui/                  tray icon + glass status indicator
+└── assets/              app icon (sunset-tile.ico) used by the tray
+docs/assets/             README banner and icon images
 tests/                   behaviour tests; no key, microphone, voice or model needed
 sample_refinement.py     stand-alone script that draws the segments of one screenshot
 ```
