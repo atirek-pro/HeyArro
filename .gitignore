@@ -6,3 +6,7 @@ __pycache__/
 resume-with.txt
 screen-segments/
 .claude
+.archify/
+BRAG.md
+brag-output/
+skills-lock.json
