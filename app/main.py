@@ -1,9 +1,9 @@
 """Hey Arro entry point.
 
 Composition root only: it builds the services and hands them to
-ApplicationCoordinator, which drives one interaction at a time. The application
-displays nothing: the question, the screen it was asked about and the refinement
-of that screen are written to the log.
+ApplicationCoordinator, which drives one interaction at a time. A glass status
+pill follows each interaction, and the answer is spoken while its marks are
+drawn on the screen; every step is also written to the log.
 """
 
 import logging
@@ -13,14 +13,25 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from app.audio.recorder import RECORDINGS_DIR, Recorder
 from app.capture import create_screen_capture_provider
-from app.config import REFINEMENT_DIR, REFINEMENT_ENABLED, SCREENSHOT_DIR
+from app.config import (
+    OVERLAY_ENABLED,
+    REFINEMENT_DIR,
+    REFINEMENT_ENABLED,
+    SCREENSHOT_DIR,
+    STATUS_INDICATOR_ENABLED,
+)
 from app.coordinator import ApplicationCoordinator
+from app.final_response import create_response_composer
+from app.final_response.overlay import ScreenOverlay
+from app.final_response.presenter import ResponsePresenter
+from app.final_response.speech import create_speech_provider
 from app.hotkey.global_hotkey import GlobalHotkey
 from app.logging_setup import configure_logging
 from app.grounding import create_plan_grounder
 from app.planner import create_response_planner
 from app.refinement import create_refinement_provider, create_segment_selector
 from app.transcription import create_transcription_provider
+from app.ui.status_indicator import StatusIndicator
 from app.ui.tray import Tray
 
 logger = logging.getLogger(__name__)
@@ -36,8 +47,8 @@ def _status_text(transcription, capture):
         f"Screenshots: {SCREENSHOT_DIR}\n"
         f"Screen segments: {REFINEMENT_DIR if REFINEMENT_ENABLED else 'disabled'}\n\n"
         "Hold Ctrl + Alt, ask your question out loud, then release. "
-        "What was asked, what was on screen and which parts of it matter are "
-        "written to the log."
+        "The answer is spoken while its marks are drawn on the screen, and every "
+        "step is written to the log."
     )
 
 
@@ -56,6 +67,15 @@ def main():
     segment_selector = create_segment_selector() if refinement else None
     response_planner = create_response_planner() if segment_selector else None
     plan_grounder = create_plan_grounder() if response_planner else None
+    response_composer = create_response_composer() if plan_grounder else None
+    response_presenter = (
+        ResponsePresenter(
+            overlay=ScreenOverlay() if OVERLAY_ENABLED else None,
+            speech=create_speech_provider(),
+        )
+        if response_composer
+        else None
+    )
 
     coordinator = ApplicationCoordinator(
         hotkey=hotkey,
@@ -66,7 +86,13 @@ def main():
         segment_selector=segment_selector,
         response_planner=response_planner,
         plan_grounder=plan_grounder,
+        response_composer=response_composer,
+        response_presenter=response_presenter,
     )
+
+    if STATUS_INDICATOR_ENABLED:
+        indicator = StatusIndicator()
+        coordinator.status_changed.connect(indicator.set_status)
 
     tray = Tray(
         on_status=lambda: QMessageBox.information(

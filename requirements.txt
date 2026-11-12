@@ -5,6 +5,7 @@ faster-whisper
 mss
 google-genai
 python-dotenv
+pyttsx3
 pytest
 
 unstructured[image]
