@@ -6,6 +6,8 @@ mss
 google-genai
 python-dotenv
 pyttsx3
+kokoro-onnx
+soundfile
 pytest
 
 unstructured[image]

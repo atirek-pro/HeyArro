@@ -145,13 +145,26 @@ FINAL_RESPONSE_THINKING_BUDGET = _read("FINAL_RESPONSE_THINKING_BUDGET", 0, int)
 
 # How long the indicator says "Responding" before the first sentence is spoken.
 RESPONDING_PAUSE_SECONDS = _read("RESPONDING_PAUSE_SECONDS", 2.0, float)
-# Speak each sentence with the Windows voice (pyttsx3). Off = the marks are still drawn.
+# Speak each sentence aloud. Off = the marks are still drawn.
 TTS_ENABLED = (_read("TTS_ENABLED", "true") or "true").strip().lower() not in ("0", "false", "no", "off")
-# Words per minute; None keeps the voice's own speed.
+# "kokoro" (natural local voice, the default) or "windows" (the pyttsx3 SAPI voice).
+TTS_PROVIDER = (_read("TTS_PROVIDER", "kokoro") or "kokoro").strip().lower()
+
+# Kokoro: female voices - American af_heart / af_bella, British bf_emma / bf_isabella,
+# Indian hf_alpha / hf_beta.
+KOKORO_VOICE = (_read("KOKORO_VOICE", "af_heart") or "af_heart").strip()
+# 1.0 = natural speed; 0.8 slower, 1.2 faster.
+KOKORO_SPEED = _read("KOKORO_SPEED", 1.0, float)
+# Pronunciation: en-us or en-gb. Empty = from the voice (American and Indian en-us, British en-gb).
+KOKORO_LANG = _read("KOKORO_LANG")
+# Where the Kokoro model and voices live; downloaded here when missing.
+KOKORO_MODEL_DIR = Path(_read("KOKORO_MODEL_DIR") or PROJECT_ROOT / "tts_model")
+
+# Windows voice: words per minute; None keeps the voice's own speed.
 TTS_RATE_WPM = _read("TTS_RATE_WPM", None, int)
-# 0.0 - 1.0; None keeps the system volume.
+# Windows voice: 0.0 - 1.0; None keeps the system volume.
 TTS_VOLUME = _read("TTS_VOLUME", None, float)
-# A SAPI voice id; empty uses the default Windows voice.
+# Windows voice: a SAPI voice id; empty uses the default Windows voice.
 TTS_VOICE_ID = _read("TTS_VOICE_ID")
 # Draw each sentence's mark (point, circle, highlight...) over the screen.
 OVERLAY_ENABLED = (_read("OVERLAY_ENABLED", "true") or "true").strip().lower() not in ("0", "false", "no", "off")
