@@ -58,6 +58,12 @@ screens in the video are illustrative mock-ups.
 
 ## How it works
 
+<p align="center">
+  <a href="docs/assets/heyarro-pipeline.png"><img src="docs/assets/heyarro-pipeline.gif" alt="HeyArro pipeline: the hotkey starts the recorder; on release the screen is captured and refined while speech is transcribed; both are joined; Gemini selects and categorises, plans, grounds and composes; the presenter speaks each sentence with the Kokoro voice while the overlay draws its mark; then Hey Arro is ready again" width="760"></a>
+</p>
+
+<p align="center"><sub>Read the lanes top to bottom: Ask, Screen and Speech run left to right, Gemini reasoning runs right to left, then Present and On-screen marks. Click the diagram for a full-size still. Generated with <a href="https://github.com/tt-a1i/archify">Archify</a>.</sub></p>
+
 One press of `Ctrl + Alt` is one interaction. Every slow step runs off the UI thread.
 Each step after capture is isolated: it reads the previous step's file, writes its own,
 and fails soft.
@@ -535,7 +541,7 @@ app/
 ├── llm/                 earlier answer stage (kept, not wired into the flow)
 ├── ui/                  tray icon + glass status indicator
 └── assets/              app icon (sunset-tile.ico) used by the tray
-docs/assets/             README banner image
+docs/assets/             README banner and pipeline diagram (animated GIF + full-size PNG)
 HeyArro_DEMO.mp4         22-second demo video
 tests/                   behaviour tests; no key, microphone, voice or model needed
 sample_refinement.py     stand-alone script that draws the segments of one screenshot
