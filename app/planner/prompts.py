@@ -44,6 +44,19 @@ MARKS_GUIDE = (
     "- magnifier: a zoomed-in view of the target shown beside it, for small text or details.\n"
     "- draw: a dashed frame where an explanation belongs, for an idea not drawn on screen.\n"
     "- none: no mark, for opening, closing or general steps.\n\n"
+    "Writing (write, write_kind): besides its mark, a step may have Hey Arro WRITE a little "
+    "on the screen, in handwriting on a small board next to the element. Use it only for "
+    "something that is NOT on the screen and makes the step clearer: a formula the "
+    "explanation needs, a worked calculation with the screen's real numbers, a short "
+    "definition, the key takeaway or a short quote.\n"
+    "- write: 1 to 3 short lines, at most 40 characters each; [] when the step writes "
+    "nothing. Never copy text that is already visible on the screen.\n"
+    "- For maths, put the formula part between $ signs using simple TeX: \\frac{a}{b}, x^2, "
+    "\\sqrt{x}, \\pi, \\times, \\sum, for example \"speed = $\\frac{distance}{time}$\" or "
+    "\"$120 / 2 = 60$ km/h\".\n"
+    "- write_kind: formula, note, quote or steps (\"\" when write is empty).\n"
+    "- Most answers write on 0 to 2 steps. Keep the step's visual_action on the element the "
+    "writing is about; use none when it is about nothing on the screen.\n\n"
 )
 
 BASE_INSTRUCTION = (
@@ -105,7 +118,9 @@ CATEGORY_PROMPTS = {
         "diagram or example that is not on screen and name the segment it should be "
         "drawn next to.\n"
         "- Prefer 3 to 8 steps and end with a step that ties the ideas together.\n"
-        "- Marks that suit teaching: highlight, callout, bracket, connector, marker, draw."
+        "- Marks that suit teaching: highlight, callout, bracket, connector, marker, draw.\n"
+        "- Teaching often benefits from writing: the formula or rule behind the idea, or a "
+        "one-line definition."
     ),
     ResponseCategory.INSTRUCTING: (
         "Category: instructing. The user wants to complete a task, and the answer is the "
@@ -118,7 +133,9 @@ CATEGORY_PROMPTS = {
         "- Prefer 2 to 8 steps and finish with how the user can see that it worked.\n"
         "- Marks that suit instructing: cursor_click for each click, badge for numbered steps, "
         "key_badge for shortcuts, scroll_hint when something is out of view, check for the "
-        "result."
+        "result.\n"
+        "- Write only when it helps doing the task, such as the exact value to type or a "
+        "short tip."
     ),
     ResponseCategory.GUIDING: (
         "Category: guiding. The user wants to find something or know the next move, and "
@@ -127,7 +144,8 @@ CATEGORY_PROMPTS = {
         "it is the right one.\n"
         "- If the question asks what to do next, plan only the single next action.\n"
         "- Marks that suit guiding: spotlight or beacon to find the element, focus_frame, "
-        "circle, point, connector to show where something goes."
+        "circle, point, connector to show where something goes.\n"
+        "- Guiding rarely needs writing."
     ),
     ResponseCategory.INFORMATIVE: (
         "Category: informative. The user wants a fact or information that is shown on the "
@@ -138,7 +156,9 @@ CATEGORY_PROMPTS = {
         "- Do not teach or give instructions; only report what the screen shows, and say "
         "so in caveats when part of it is unreadable.\n"
         "- Marks that suit informative: marker or underline on each value read out, rectangle "
-        "around a group, magnifier for small text, check or cross for yes/no facts."
+        "around a group, magnifier for small text, check or cross for yes/no facts.\n"
+        "- When the answer is worked out from values on the screen (a total, a difference, an "
+        "average), write the short calculation and its result."
     ),
 }
 

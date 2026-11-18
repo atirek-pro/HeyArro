@@ -573,3 +573,41 @@ def test_a_plan_without_the_extra_fields_still_works(tmp_path):
     step = json.loads((tmp_path / PLAN_NAME).read_text(encoding="utf-8"))["steps"][0]
     assert step["visual_action"] == "spotlight"
     assert step["label"] == "" and step["keys"] == []
+
+
+# --- handwriting --------------------------------------------------------------------
+
+
+def test_the_brief_explains_when_to_write():
+    assert "Writing (write, write_kind)" in BASE_INSTRUCTION
+    assert "NOT on the screen" in BASE_INSTRUCTION
+    assert "\\frac{a}{b}" in BASE_INSTRUCTION
+
+
+def test_written_lines_are_saved_cleaned_and_capped(tmp_path):
+    manifest = _folder(tmp_path)
+    long_line = "x" * 60
+    step = _step(action="none")
+    step.update({"write": ["  speed =  $\\frac{d}{t}$ ", "", long_line, "third", "fourth"], "write_kind": " Formula "})
+    planner, _models = _planner(_answer([step]))
+
+    planner.plan(_selection(manifest))
+
+    saved = json.loads((tmp_path / PLAN_NAME).read_text(encoding="utf-8"))["steps"][0]
+    assert saved["write"] == ["speed = $\\frac{d}{t}$", "x" * 40, "third"]
+    assert saved["write_kind"] == "formula"
+
+
+def test_an_unknown_write_kind_becomes_a_note_and_no_lines_means_no_kind(tmp_path):
+    manifest = _folder(tmp_path)
+    first = _step()
+    first.update({"write": ["Key idea"], "write_kind": "poem"})
+    second = _step()
+    second.update({"write": ["  "], "write_kind": "formula"})
+    planner, _models = _planner(_answer([first, second]))
+
+    planner.plan(_selection(manifest))
+
+    steps = json.loads((tmp_path / PLAN_NAME).read_text(encoding="utf-8"))["steps"]
+    assert (steps[0]["write"], steps[0]["write_kind"]) == (["Key idea"], "note")
+    assert (steps[1]["write"], steps[1]["write_kind"]) == ([], "")
