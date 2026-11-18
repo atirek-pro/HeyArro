@@ -24,7 +24,15 @@ from pydantic import BaseModel, ValidationError
 from app import config
 from app.planner.manifest import write_plan
 from app.planner.prompts import system_instruction
-from app.planner.provider import PlanResult, ResponsePlanner, ResponsePlanningError, VisualAction
+from app.planner.provider import (
+    MAX_KEYS,
+    MAX_LABEL_CHARS,
+    SCROLL_DIRECTIONS,
+    PlanResult,
+    ResponsePlanner,
+    ResponsePlanningError,
+    VisualAction,
+)
 from app.refinement.manifest import RELEVANT_MANIFEST_NAME
 from app.refinement.provider import SelectionResult
 
@@ -40,6 +48,12 @@ class _Step(BaseModel):
     segment_ids: list[int]
     visual_action: VisualAction
     key_points: list[str]
+    # Only for the marks that use them; empty otherwise.
+    label: str = ""
+    keys: list[str] = []
+    scroll: str = ""
+    to_target: str = ""
+    to_segment_ids: list[int] = []
 
 
 class _Plan(BaseModel):
@@ -240,31 +254,63 @@ class GeminiResponsePlanner(ResponsePlanner):
 
     # --- the saved document -------------------------------------------------
 
+    @staticmethod
+    def _mark_fields(order, step, known_ids, resolved):
+        """The extra fields of the marks that need them, cleaned; empty for every other mark."""
+        action = step.visual_action
+        label = " ".join(step.label.split())[:MAX_LABEL_CHARS] if action is VisualAction.CALLOUT else ""
+        keys = (
+            [" ".join(key.split()) for key in step.keys if key.strip()][:MAX_KEYS]
+            if action is VisualAction.KEY_BADGE
+            else []
+        )
+        scroll = step.scroll.strip().lower() if action is VisualAction.SCROLL_HINT else ""
+        if scroll and scroll not in SCROLL_DIRECTIONS:
+            logger.warning("[Plan] step %s has an unknown scroll direction %r; ignored", order, step.scroll)
+            scroll = ""
+        to_target = " ".join(step.to_target.split()) if action is VisualAction.CONNECTOR else ""
+        to_ids = known_ids(order, step.to_segment_ids) if to_target else []
+        return {
+            "label": label,
+            "keys": keys,
+            "scroll": scroll,
+            "to_target": to_target,
+            "to_segment_ids": to_ids,
+            "to_targets": resolved(to_ids),
+        }
+
     def _document(self, plan, manifest, segments, size, category, seconds):
         boxes = {segment["id"]: segment for segment in segments}
 
-        steps = []
-        for order, step in enumerate(plan.steps, start=1):
+        def known_ids(order, segment_ids):
             ids = []
-            for segment_id in step.segment_ids:
+            for segment_id in segment_ids:
                 if segment_id not in boxes:
                     logger.warning("[Plan] step %s names unknown segment id %s; ignored", order, segment_id)
                 elif segment_id not in ids:
                     ids.append(segment_id)
-            steps.append(
-                {
-                    "order": order,
-                    "purpose": " ".join(step.purpose.split()),
-                    "target": " ".join(step.target.split()),
-                    "visual_action": step.visual_action.value,
-                    "key_points": [" ".join(point.split()) for point in step.key_points if point.strip()],
-                    "segment_ids": ids,
-                    "targets": [
-                        {"id": segment_id, "kind": boxes[segment_id]["kind"], "box": boxes[segment_id]["box"]}
-                        for segment_id in ids
-                    ],
-                }
-            )
+            return ids
+
+        def resolved(ids):
+            return [
+                {"id": segment_id, "kind": boxes[segment_id]["kind"], "box": boxes[segment_id]["box"]}
+                for segment_id in ids
+            ]
+
+        steps = []
+        for order, step in enumerate(plan.steps, start=1):
+            ids = known_ids(order, step.segment_ids)
+            entry = {
+                "order": order,
+                "purpose": " ".join(step.purpose.split()),
+                "target": " ".join(step.target.split()),
+                "visual_action": step.visual_action.value,
+                "key_points": [" ".join(point.split()) for point in step.key_points if point.strip()],
+                "segment_ids": ids,
+                "targets": resolved(ids),
+            }
+            entry.update(self._mark_fields(order, step, known_ids, resolved))
+            steps.append(entry)
 
         return {
             "query": manifest["query"],

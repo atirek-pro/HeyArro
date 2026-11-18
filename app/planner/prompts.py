@@ -7,6 +7,45 @@ like for that kind of question, so the plan can later guide the final response.
 
 from app.refinement.provider import ResponseCategory
 
+# What each overlay mark looks like and when it suits what is being said.
+MARKS_GUIDE = (
+    "Marks (visual_action), drawn on the target while its step is spoken:\n"
+    "- point: a pointer with a pulsing ripple on a small control. Use for 'here it is'.\n"
+    "- circle: a ring around one control or icon.\n"
+    "- rectangle: an outline box around a field, button, panel or card.\n"
+    "- highlight: a filled box over an area such as a section, chart or table.\n"
+    "- fill_circle: a filled circle over a round or compact item.\n"
+    "- marker: a highlighter-pen swipe behind a word, value or line of text being read out.\n"
+    "- underline: a line under a word, value or line of text.\n"
+    "- wavy_underline: a squiggle under text that is wrong, a warning or needs care.\n"
+    "- bracket: a bracket beside a paragraph, list or block of lines that belong together.\n"
+    "- focus_frame: four corner brackets around something to look at closely.\n"
+    "- spotlight: dims the rest of the screen around one element. Use when the screen is busy "
+    "and the user must find one thing.\n"
+    "- beacon: rings pulsing out from a small or hard-to-spot element.\n"
+    "- glow: a soft glowing outline for a gentle, friendly emphasis.\n"
+    "- arrow: an arrow from the screen's open side pointing at the element.\n"
+    "- cursor_click: a mouse cursor moves to the element and clicks it. Use when the step "
+    "tells the user to click something.\n"
+    "- check: a tick next to the right option, a correct value or something done.\n"
+    "- strike: a line through something to ignore or that is outdated.\n"
+    "- cross: an X over the wrong option or something to avoid.\n"
+    "- badge: a numbered circle (the step number) on the element. Use for ordered steps the "
+    "user will follow.\n"
+    "- callout: a small label next to the element. Also give label: at most 5 words, using "
+    "the exact words on the screen where possible.\n"
+    "- key_badge: keyboard keys next to the element for a shortcut. Also give keys, one key "
+    "per item, for example [\"Ctrl\", \"S\"].\n"
+    "- scroll_hint: shows the user to scroll to reach something. Also give scroll: \"up\" or "
+    "\"down\"; target is the area to scroll.\n"
+    "- connector: a curved arrow from the target to a second element, for 'drag this to "
+    "there' or 'this value comes from that one'. Also give to_target (a description of the "
+    "second element, like target) and to_segment_ids (segment ids that contain it, or []).\n"
+    "- magnifier: a zoomed-in view of the target shown beside it, for small text or details.\n"
+    "- draw: a dashed frame where an explanation belongs, for an idea not drawn on screen.\n"
+    "- none: no mark, for opening, closing or general steps.\n\n"
+)
+
 BASE_INSTRUCTION = (
     "You plan how a screen assistant should respond to a user's spoken question about their "
     "screen. The main reference is the full screenshot: base the plan on what it shows, "
@@ -39,15 +78,21 @@ BASE_INSTRUCTION = (
     "segment_ids (the ids of the provided segments that "
     "support the step; use only ids from the list, and an empty list when no segment "
     "contains what the step is about), a "
-    "visual_action for the overlay (point, circle, underline, arrow, highlight, draw, or none "
-    "when nothing on screen needs marking) and key_points (short phrases the step must "
-    "cover, not full sentences).\n"
+    "visual_action for the overlay (one of the marks listed below, or none when nothing on "
+    "screen needs marking) and key_points (short phrases the step must cover, not full "
+    "sentences).\n"
+    "- Choose each step's visual_action for what that step will say, so the mark makes the "
+    "spoken words easier to follow. Vary the marks across the steps of one plan when it "
+    "helps; do not mark everything the same way.\n"
+    "- label, keys, scroll, to_target and to_segment_ids are only for the marks that use "
+    "them (see below); leave them empty (\"\" or []) for every other mark.\n"
     "- When a step reports or uses specific information from the screen (names, labels, "
     "numbers, shortcuts), write the exact values in its key_points, not a reminder to read "
     "them.\n"
     "- caveats: things that could make the plan fail, such as an element that is not "
     "visible on the screen or text that cannot be read; an empty list when there are none.\n"
     "- Be brief. Never invent screen content that is not in the screenshot.\n\n"
+    + MARKS_GUIDE
 )
 
 CATEGORY_PROMPTS = {
@@ -59,7 +104,8 @@ CATEGORY_PROMPTS = {
         "- Anchor each idea to the segment where it is visible. Use 'draw' for a "
         "diagram or example that is not on screen and name the segment it should be "
         "drawn next to.\n"
-        "- Prefer 3 to 8 steps and end with a step that ties the ideas together."
+        "- Prefer 3 to 8 steps and end with a step that ties the ideas together.\n"
+        "- Marks that suit teaching: highlight, callout, bracket, connector, marker, draw."
     ),
     ResponseCategory.INSTRUCTING: (
         "Category: instructing. The user wants to complete a task, and the answer is the "
@@ -69,14 +115,19 @@ CATEGORY_PROMPTS = {
         "- If a needed control is not visible yet (a closed menu, another tab), add a "
         "step that opens it, pointing at the visible control that leads there, and note "
         "it in caveats.\n"
-        "- Prefer 2 to 8 steps and finish with how the user can see that it worked."
+        "- Prefer 2 to 8 steps and finish with how the user can see that it worked.\n"
+        "- Marks that suit instructing: cursor_click for each click, badge for numbered steps, "
+        "key_badge for shortcuts, scroll_hint when something is out of view, check for the "
+        "result."
     ),
     ResponseCategory.GUIDING: (
         "Category: guiding. The user wants to find something or know the next move, and "
         "the answer points at one or a few elements with no full procedure.\n"
         "- Keep the plan to 1 to 3 steps: point at the element, then say in one point why "
         "it is the right one.\n"
-        "- If the question asks what to do next, plan only the single next action."
+        "- If the question asks what to do next, plan only the single next action.\n"
+        "- Marks that suit guiding: spotlight or beacon to find the element, focus_frame, "
+        "circle, point, connector to show where something goes."
     ),
     ResponseCategory.INFORMATIVE: (
         "Category: informative. The user wants a fact or information that is shown on the "
@@ -85,7 +136,9 @@ CATEGORY_PROMPTS = {
         "the segments where it appears. List exactly what must be reported (for example a "
         "count and every name) in key_points.\n"
         "- Do not teach or give instructions; only report what the screen shows, and say "
-        "so in caveats when part of it is unreadable."
+        "so in caveats when part of it is unreadable.\n"
+        "- Marks that suit informative: marker or underline on each value read out, rectangle "
+        "around a group, magnifier for small text, check or cross for yes/no facts."
     ),
 }
 

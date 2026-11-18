@@ -101,29 +101,37 @@ class GeminiPlanGrounder(PlanGrounder):
             "[Grounding] locating %s of %s step(s) with %s", len(needs_mark), len(steps), self._model
         )
 
-        with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_CALLS, max(len(needs_mark), 1))) as pool:
-            results = pool.map(lambda step: self._locate(image, step), needs_mark)
-            found = {step["order"]: result for step, result in zip(needs_mark, results)}
+        # A connector step also needs its second element, found the same way as a target.
+        second_targets = [
+            {"order": step["order"], "target": step["to_target"], "targets": step.get("to_targets") or []}
+            for step in needs_mark
+            if step["visual_action"] == "connector" and step.get("to_target")
+        ]
+        jobs = [("target", step) for step in needs_mark] + [("to", step) for step in second_targets]
+        with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_CALLS, max(len(jobs), 1))) as pool:
+            results = pool.map(lambda job: self._locate(image, job[1]), jobs)
+            found = {(kind, step["order"]): result for (kind, step), result in zip(jobs, results)}
 
         pointers = []
         for step in steps:
-            located = found.get(step["order"])
+            located = found.get(("target", step["order"]))
             box = located["box"] if located else None
-            pointers.append(
-                {
-                    "order": step["order"],
-                    "target": step.get("target", ""),
-                    "visual_action": step["visual_action"],
-                    "searched": located["searched"] if located else None,
-                    "found": box is not None,
-                    "box": box,
-                    "point": (
-                        {"x": box["left"] + box["width"] // 2, "y": box["top"] + box["height"] // 2}
-                        if box
-                        else None
-                    ),
-                }
-            )
+            pointer = {
+                "order": step["order"],
+                "target": step.get("target", ""),
+                "visual_action": step["visual_action"],
+                "searched": located["searched"] if located else None,
+                "found": box is not None,
+                "box": box,
+                "point": self._centre(box),
+            }
+            if step["visual_action"] == "connector":
+                to_located = found.get(("to", step["order"]))
+                to_box = to_located["box"] if to_located else None
+                pointer["to_target"] = step.get("to_target", "")
+                pointer["to_box"] = to_box
+                pointer["to_point"] = self._centre(to_box)
+            pointers.append(pointer)
 
         seconds = time.perf_counter() - started
         try:
@@ -149,10 +157,21 @@ class GeminiPlanGrounder(PlanGrounder):
                 pointer["target"],
                 pointer["box"] if pointer["found"] else ("not found" if pointer["visual_action"] != "none" else "no mark needed"),
             )
+            if "to_box" in pointer:
+                logger.info(
+                    "[Grounding] step %s connects to %r: %s",
+                    pointer["order"],
+                    pointer["to_target"],
+                    pointer["to_box"] or "not found",
+                )
         logger.info("[Grounding] %s of %s located in %.2fs -> %s", located_count, len(needs_mark), seconds, path)
         return GroundingResult(
             pointers_path=str(path), located=located_count, total=len(needs_mark), seconds=seconds
         )
+
+    @staticmethod
+    def _centre(box):
+        return {"x": box["left"] + box["width"] // 2, "y": box["top"] + box["height"] // 2} if box else None
 
     # --- inputs -------------------------------------------------------------
 

@@ -214,10 +214,36 @@ Screenshot pixels are converted to screen positions, including display scaling.
 |---|---|
 | `point` | a pointer whose tip sits on the target, with a pulsing ripple |
 | `circle` | a ring drawn around the target |
-| `underline` | a line drawn under the target |
-| `arrow` | an arrow sweeping in from open space to the target's edge |
+| `rectangle` | an outline box traced around the target |
 | `highlight` | a glowing translucent box over the target |
+| `fill_circle` | a translucent filled circle with a glowing rim |
+| `marker` | a highlighter-pen swipe behind text |
+| `underline` | a line drawn under the target |
+| `wavy_underline` | a squiggle under text that is wrong or needs care |
+| `bracket` | a tall bracket beside a paragraph or list |
+| `focus_frame` | four corner brackets snapping in around the target |
+| `spotlight` | the rest of the screen dims around the target |
+| `beacon` | rings pulsing out from a small element |
+| `glow` | a soft breathing halo around the target |
+| `arrow` | an arrow sweeping in from open space to the target's edge |
+| `cursor_click` | a mouse cursor glides to the target and clicks |
+| `check` | a tick next to the right option or result |
+| `strike` | a line through something to ignore |
+| `cross` | an X over the wrong option |
+| `badge` | a numbered circle (the step number) on the target |
+| `callout` | a short label in a glass card beside the target |
+| `key_badge` | keyboard caps for a shortcut, such as `Ctrl` + `S` |
+| `scroll_hint` | a mouse with moving chevrons showing which way to scroll |
+| `connector` | a curved arrow from the target to a second element |
+| `magnifier` | a zoomed-in lens of the target, cut from the screenshot |
 | `draw` | a moving dashed frame where an explanation belongs |
+
+The planner picks the mark for each step from what that step will say (for example
+`cursor_click` for "click Save", `marker` for a value being read out, `key_badge` for a
+shortcut), with suggestions per question category. A mark that needs extra data it did not
+get is drawn as a simpler one: a `connector` without its second element becomes an `arrow`,
+a `callout` or `key_badge` without text becomes a `highlight`, a `scroll_hint` without a
+direction becomes a `beacon`.
 
 When the last sentence is done, the screen is cleared, the indicator fades out and Hey
 Arro is ready for the next question.
@@ -537,7 +563,7 @@ app/
 │                        Gemini segment selection + categorisation
 ├── planner/             per-category prompts + Gemini response planner
 ├── grounding/           Gemini target -> pixel-box grounding
-├── final_response/      Gemini composer, Kokoro + Windows speech, on-screen overlay, presenter
+├── final_response/      Gemini composer, Kokoro + Windows speech, on-screen overlay + marks, presenter
 ├── llm/                 earlier answer stage (kept, not wired into the flow)
 ├── ui/                  tray icon + glass status indicator
 └── assets/              app icon (sunset-tile.ico) used by the tray
@@ -579,7 +605,7 @@ sample_refinement.py     stand-alone script that draws the segments of one scree
 heyarro-env\Scripts\python.exe -m pytest tests -q --ignore=tests/test_llm_providers.py
 ```
 
-The suite (224 tests) replaces the microphone, Whisper, the screen, `unstructured`,
+The suite (332 tests) replaces the microphone, Whisper, the screen, `unstructured`,
 Gemini, the voice and the thread pool with doubles. It needs no API key, hardware or
 model download, and nothing is spoken or shown while it runs.
 
@@ -666,7 +692,8 @@ cache on its first sentence.
 - The status indicator sits at the top centre and can partly cover a mark there.
 - A `draw` mark is a dashed frame around where an explanation belongs. No freehand sketch
   is generated.
-- All sentences of one plan step share that step's mark.
+- All sentences of one plan step share that step's mark, and one mark is on screen at a
+  time (a `connector` is the only mark that touches two elements).
 - No marks are drawn when `SCREENSHOT_MONITOR=0` (all monitors combined).
 - A `fallback` question ends without a spoken reply.
 

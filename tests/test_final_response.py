@@ -461,3 +461,76 @@ def test_without_a_composer_the_flow_ends_after_grounding(tmp_path, caplog):
     assert "Composing the final response" not in caplog.text
     assert "Interaction complete" in caplog.text
     assert coordinator.working is False
+
+
+# --- mark details ----------------------------------------------------------------
+
+
+def _marked_folder(tmp_path, step_fields, pointer_fields=None, action="callout"):
+    grounding = _folder(tmp_path)
+    plan = json.loads((tmp_path / PLAN_NAME).read_text(encoding="utf-8"))
+    pointers = json.loads((tmp_path / POINTERS_NAME).read_text(encoding="utf-8"))
+    plan["steps"][0]["visual_action"] = action
+    plan["steps"][0].update(step_fields)
+    pointers["pointers"][0]["visual_action"] = action
+    pointers["pointers"][0].update(pointer_fields or {})
+    (tmp_path / PLAN_NAME).write_text(json.dumps(plan), encoding="utf-8")
+    (tmp_path / POINTERS_NAME).write_text(json.dumps(pointers), encoding="utf-8")
+    return grounding
+
+
+def test_each_sentence_carries_its_mark_details_copied_in_code(tmp_path):
+    grounding = _marked_folder(tmp_path, {"label": "Search", "keys": [], "scroll": ""})
+    composer, _models = _composer(_answer())
+
+    composer.compose(grounding)
+
+    sentence = _response(tmp_path)["sentences"][1]
+    assert sentence["visual_action"] == "callout"
+    assert sentence["details"] == {
+        "number": 1, "label": "Search", "keys": [], "scroll": "", "to_box": None, "to_point": None,
+    }
+    assert _response(tmp_path)["sentences"][0]["details"] is None  # an opening sentence has no mark
+
+
+def test_a_connector_gets_its_second_target(tmp_path):
+    to_box = {"left": 10, "top": 10, "width": 40, "height": 20}
+    grounding = _marked_folder(
+        tmp_path, {"to_target": "the Trash"}, {"to_box": to_box, "to_point": {"x": 30, "y": 20}}, action="connector"
+    )
+    composer, _models = _composer(_answer())
+
+    composer.compose(grounding)
+
+    sentence = _response(tmp_path)["sentences"][1]
+    assert sentence["visual_action"] == "connector"
+    assert sentence["details"]["to_box"] == to_box
+
+
+@pytest.mark.parametrize(
+    "action, fields, expected",
+    [
+        ("connector", {}, "arrow"),
+        ("callout", {"label": ""}, "highlight"),
+        ("key_badge", {"keys": []}, "highlight"),
+        ("scroll_hint", {"scroll": ""}, "beacon"),
+        ("badge", {}, "badge"),
+    ],
+)
+def test_a_mark_missing_its_data_falls_back_to_a_simpler_one(tmp_path, action, fields, expected):
+    grounding = _marked_folder(tmp_path, fields, action=action)
+    composer, _models = _composer(_answer())
+
+    composer.compose(grounding)
+
+    assert _response(tmp_path)["sentences"][1]["visual_action"] == expected
+
+
+def test_the_composer_sees_labels_and_keys_in_the_plan(tmp_path):
+    grounding = _marked_folder(tmp_path, {"keys": ["Ctrl", "F"]}, action="key_badge")
+    composer, models = _composer(_answer())
+
+    composer.compose(grounding)
+
+    prompt = models.calls[0]["contents"].parts[1].text
+    assert '"keys":["Ctrl","F"]' in prompt

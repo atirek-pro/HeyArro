@@ -488,3 +488,55 @@ def test_without_a_grounder_the_flow_ends_after_the_plan(tmp_path, caplog):
     assert "Locating the plan's targets" not in caplog.text
     assert "Interaction complete" in caplog.text
     assert coordinator.working is False
+
+
+# --- the connector's second target ------------------------------------------------
+
+
+def test_a_connector_also_locates_its_second_element(tmp_path):
+    step = _step(action="connector", target="the photo")
+    step.update({"to_target": "the Trash", "to_targets": []})
+    plan = _plan(tmp_path, [step])
+
+    def answer(kwargs):
+        wanted = kwargs["contents"].parts[1].text
+        return _found([500, 250, 600, 750]) if "photo" in wanted else _found([0, 0, 100, 100])
+
+    grounder, models = _grounder(answer)
+
+    result = grounder.ground(plan)
+
+    assert len(models.calls) == 2
+    assert (result.located, result.total) == (1, 1)
+    pointer = _pointers(tmp_path)[0]
+    assert pointer["box"] == {"left": 480, "top": 540, "width": 960, "height": 108}
+    assert pointer["to_target"] == "the Trash"
+    assert pointer["to_box"] == {"left": 0, "top": 0, "width": 192, "height": 108}
+    assert pointer["to_point"] == {"x": 96, "y": 54}
+
+
+def test_a_connector_whose_second_element_is_missing_keeps_its_first(tmp_path):
+    step = _step(action="connector", target="the photo")
+    step.update({"to_target": "the Trash", "to_targets": []})
+    plan = _plan(tmp_path, [step])
+
+    def answer(kwargs):
+        return _found([500, 250, 600, 750]) if "photo" in kwargs["contents"].parts[1].text else NOT_FOUND
+
+    grounder, _models = _grounder(answer)
+
+    grounder.ground(plan)
+
+    pointer = _pointers(tmp_path)[0]
+    assert pointer["found"] is True
+    assert pointer["to_box"] is None and pointer["to_point"] is None
+
+
+def test_other_marks_have_no_second_target(tmp_path):
+    plan = _plan(tmp_path, [_step(action="rectangle")])
+    grounder, models = _grounder(_found([500, 250, 600, 750]))
+
+    grounder.ground(plan)
+
+    assert len(models.calls) == 1
+    assert "to_box" not in _pointers(tmp_path)[0]
