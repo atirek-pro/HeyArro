@@ -72,6 +72,9 @@ class ResponsePresenter(QObject):
             logger.error("[Presenting] could not read the final response: %s", exc)
             self.finished.emit()
             return
+        # The screenshot sits next to final_response.json; the magnifier zooms into it.
+        screenshot = document.get("screenshot")
+        screenshot_path = str(Path(response.response_path).parent / screenshot) if screenshot else None
 
         self._sentences = sentences
         self._index = 0
@@ -79,7 +82,7 @@ class ResponsePresenter(QObject):
             self._overlay is not None
             and size.get("width")
             and size.get("height")
-            and self._overlay.prepare((size["width"], size["height"]))
+            and self._overlay.prepare((size["width"], size["height"]), screenshot_path=screenshot_path)
         )
         logger.info(
             "[Presenting] %s sentence(s); speech %s, marks %s",
@@ -127,7 +130,9 @@ class ResponsePresenter(QObject):
             sentence.get("text", ""),
         )
         if self._drawing:
-            self._overlay.show_mark(sentence.get("visual_action"), pointer.get("box"), pointer.get("point"))
+            self._overlay.show_mark(
+                sentence.get("visual_action"), pointer.get("box"), pointer.get("point"), sentence.get("details")
+            )
         self.status_changed.emit(AssistantStatus.SPEAKING)
 
         text = sentence.get("text", "")

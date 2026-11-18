@@ -148,6 +148,11 @@ class GeminiResponseComposer(ResponseComposer):
                     "target": step.get("target", ""),
                     "visual_action": step.get("visual_action", "none"),
                     "key_points": step.get("key_points", []),
+                    **{
+                        field: step[field]
+                        for field in ("label", "keys", "scroll", "to_target")
+                        if step.get(field)
+                    },
                 }
                 for step in plan["steps"]
             ],
@@ -227,14 +232,19 @@ class GeminiResponseComposer(ResponseComposer):
                 and pointer is not None
                 and pointer.get("found")
             )
+            action = step.get("visual_action", "none") if step else "none"
+            details = _mark_details(step, pointer) if has_pointer else None
+            if has_pointer:
+                action = _usable_action(action, details)
             sentences.append(
                 {
                     "index": len(sentences) + 1,
                     "text": text,
                     "step": item.step,
-                    "visual_action": step.get("visual_action", "none") if step else "none",
+                    "visual_action": action,
                     "target": step.get("target", "") if step else "",
                     "pointer": {"box": pointer["box"], "point": pointer["point"]} if has_pointer else None,
+                    "details": details,
                 }
             )
 
@@ -244,3 +254,35 @@ class GeminiResponseComposer(ResponseComposer):
         spoken = {sentence["step"] for sentence in sentences}
         uncovered = [step["order"] for step in steps if step["order"] not in spoken]
         return sentences, uncovered
+
+
+# --- mark details -------------------------------------------------------------
+
+# A mark whose extra data is missing is drawn as a simpler mark instead.
+FALLBACK_ACTIONS = {
+    "connector": ("to_box", "arrow"),
+    "callout": ("label", "highlight"),
+    "key_badge": ("keys", "highlight"),
+    "scroll_hint": ("scroll", "beacon"),
+}
+
+
+def _mark_details(step, pointer):
+    """The extra data a mark needs, copied from the plan step and its pointer (never from the model)."""
+    return {
+        "number": step["order"],
+        "label": step.get("label", ""),
+        "keys": list(step.get("keys") or []),
+        "scroll": step.get("scroll", ""),
+        "to_box": pointer.get("to_box"),
+        "to_point": pointer.get("to_point"),
+    }
+
+
+def _usable_action(action, details):
+    """``action``, or its simpler fallback when the data it needs is missing."""
+    needed = FALLBACK_ACTIONS.get(action)
+    if needed and not details.get(needed[0]):
+        logger.info("[Response] %s has no %s; drawing %s instead", action, needed[0], needed[1])
+        return needed[1]
+    return action

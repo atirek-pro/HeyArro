@@ -27,7 +27,35 @@ class VisualAction(str, Enum):
     ARROW = "arrow"
     HIGHLIGHT = "highlight"
     DRAW = "draw"
+    # Shapes and attention (one target, no extra data).
+    RECTANGLE = "rectangle"
+    FILL_CIRCLE = "fill_circle"
+    MARKER = "marker"
+    FOCUS_FRAME = "focus_frame"
+    SPOTLIGHT = "spotlight"
+    BEACON = "beacon"
+    GLOW = "glow"
+    BRACKET = "bracket"
+    WAVY_UNDERLINE = "wavy_underline"
+    STRIKE = "strike"
+    CROSS = "cross"
+    CHECK = "check"
+    CURSOR_CLICK = "cursor_click"
+    # Marks that carry a little data from the plan.
+    BADGE = "badge"
+    CALLOUT = "callout"
+    KEY_BADGE = "key_badge"
+    SCROLL_HINT = "scroll_hint"
+    # A second target, or a zoomed view of the screenshot.
+    CONNECTOR = "connector"
+    MAGNIFIER = "magnifier"
     NONE = "none"
+
+
+# The fields a step may carry for the marks that need them.
+SCROLL_DIRECTIONS = ("up", "down")
+MAX_LABEL_CHARS = 40
+MAX_KEYS = 4
 
 
 @dataclass(frozen=True)

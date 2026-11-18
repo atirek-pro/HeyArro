@@ -46,12 +46,14 @@ class FakeOverlay:
         self.marks = []
         self.cleared = 0
 
-    def prepare(self, size):
+    def prepare(self, size, screenshot_path=None):
         self.prepared.append(size)
+        self.screenshot_path = screenshot_path
         return self._ready
 
-    def show_mark(self, action, box, point):
+    def show_mark(self, action, box, point, details=None):
         self.marks.append((action, box, point))
+        self.details = getattr(self, "details", []) + [details]
 
     def clear(self):
         self.cleared += 1
@@ -575,18 +577,94 @@ def test_the_overlay_skips_the_combined_monitor_and_uses_the_primary_for_monitor
     assert target_screen((1920, 1080), 1) is not None
 
 
-@pytest.mark.parametrize("action", ["point", "circle", "underline", "arrow", "highlight", "draw"])
-def test_every_mark_can_be_painted(action):
+MARK_BOX = {"left": 300, "top": 250, "width": 120, "height": 40}
+MARK_DETAILS = {
+    "number": 2,
+    "label": "Font size",
+    "keys": ["Ctrl", "S"],
+    "scroll": "down",
+    "to_box": {"left": 600, "top": 420, "width": 80, "height": 40},
+    "to_point": {"x": 640, "y": 440},
+}
+
+
+def _all_marks():
+    from app.planner.provider import VisualAction
+
+    return [action.value for action in VisualAction if action.value != "none"]
+
+
+@pytest.mark.parametrize("action", _all_marks())
+@pytest.mark.parametrize("progress", [0.0, 0.5, 1.0])
+def test_every_mark_can_be_painted(action, progress, tmp_path):
+    screenshot = tmp_path / "screenshot.png"
+    shot = QImage(800, 600, QImage.Format_ARGB32)
+    shot.fill(0xFF3366CC)
+    shot.save(str(screenshot))
+
     overlay = ScreenOverlay(monitor_index=1)
     overlay.resize(800, 600)
-    overlay._mark = (action, QRectF(300, 250, 120, 40), QPointF(360, 270))
-    overlay._progress = 1.0
+    overlay._scale = (1.0, 1.0)
+    overlay._screenshot_path = str(screenshot)
+    overlay.show_mark(action, MARK_BOX, {"x": 360, "y": 270}, MARK_DETAILS)
+    overlay._reveal.stop()
+    overlay._pulse.stop()
+    overlay._progress = progress
     image = QImage(800, 600, QImage.Format_ARGB32_Premultiplied)
     image.fill(0)
 
     overlay.render(image)
 
-    assert any(image.pixelColor(x, y).alpha() > 0 for x in range(250, 480, 4) for y in range(200, 340, 4))
+    if progress == 1.0:
+        assert any(image.pixelColor(x, y).alpha() > 0 for x in range(0, 800, 4) for y in range(0, 600, 4))
+    overlay.clear()
+
+
+def test_marks_missing_their_data_fall_back_to_a_simpler_mark():
+    from app.final_response.marks import MarkContext, paint_mark
+    from PySide6.QtGui import QPainter
+
+    for action in ("callout", "key_badge", "scroll_hint", "connector", "magnifier"):
+        image = QImage(400, 300, QImage.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        painter = QPainter(image)
+        paint_mark(painter, action, QRectF(150, 120, 80, 30), QPointF(190, 135), 1.0, 0.3, MarkContext(canvas=QRectF(0, 0, 400, 300)))
+        painter.end()
+        assert any(image.pixelColor(x, y).alpha() > 0 for x in range(0, 400, 4) for y in range(0, 300, 4)), action
+
+
+def test_an_unknown_mark_is_drawn_as_a_highlight():
+    from app.final_response.marks import MARKS, _draw_highlight
+
+    assert MARKS.get("sparkles", _draw_highlight) is _draw_highlight
+
+
+def test_the_magnifier_zooms_into_the_screenshot(tmp_path):
+    screenshot = tmp_path / "screenshot.png"
+    shot = QImage(800, 600, QImage.Format_ARGB32)
+    shot.fill(0xFF00AA00)
+    shot.save(str(screenshot))
+    overlay = ScreenOverlay(monitor_index=1)
+    overlay._scale = (1.0, 1.0)
+    overlay._screenshot_path = str(screenshot)
+
+    overlay.show_mark("magnifier", MARK_BOX, None)
+    zoom = overlay._mark[3].zoom
+
+    assert zoom is not None and (zoom.width(), zoom.height()) == (144, 64)  # the box plus 12 px around it
+    overlay.clear()
+
+
+def test_the_connector_scales_its_second_target(tmp_path):
+    overlay = ScreenOverlay(monitor_index=1)
+    overlay._scale = (0.5, 0.5)
+
+    overlay.show_mark("connector", MARK_BOX, None, MARK_DETAILS)
+    context = overlay._mark[3]
+
+    assert context.to_rect == QRectF(300, 210, 40, 20)
+    assert context.to_centre == QPointF(320, 220)
+    overlay.clear()
 
 
 def test_a_mark_without_a_box_or_action_draws_nothing():

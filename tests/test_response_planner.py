@@ -497,3 +497,79 @@ def test_without_a_planner_the_flow_ends_after_selection(tmp_path, caplog):
     assert "Planning a" not in caplog.text
     assert "Interaction complete" in caplog.text
     assert coordinator.working is False
+
+
+# --- the new marks --------------------------------------------------------------
+
+
+def test_the_brief_lists_every_mark_and_its_extra_fields():
+    from app.planner.provider import VisualAction
+
+    for action in VisualAction:
+        assert f"- {action.value}:" in BASE_INSTRUCTION
+    for field in ("label", "keys", "scroll", "to_target", "to_segment_ids"):
+        assert field in BASE_INSTRUCTION
+
+
+@pytest.mark.parametrize("category", PLANNED)
+def test_each_category_suggests_marks_that_suit_it(category):
+    assert "Marks that suit" in CATEGORY_PROMPTS[category]
+
+
+def _mark_step(action, **fields):
+    step = _step(action=action)
+    step.update(fields)
+    return step
+
+
+def test_the_extra_fields_of_each_mark_are_saved_cleaned(tmp_path):
+    manifest = _folder(tmp_path)
+    steps = [
+        _mark_step("callout", label="  Font   size box that is far too long for a label  "),
+        _mark_step("key_badge", keys=["Ctrl", " ", "Shift", "S", "X", "Y"]),
+        _mark_step("scroll_hint", scroll=" Down "),
+        _mark_step("connector", to_target=" the  Trash ", to_segment_ids=[1, 9, 1]),
+    ]
+    planner, _models = _planner(_answer(steps))
+
+    planner.plan(_selection(manifest))
+
+    saved = json.loads((tmp_path / PLAN_NAME).read_text(encoding="utf-8"))["steps"]
+    assert saved[0]["label"] == "Font size box that is far too long for a"[:40]
+    assert len(saved[0]["label"]) <= 40
+    assert saved[1]["keys"] == ["Ctrl", "Shift", "S", "X"]
+    assert saved[2]["scroll"] == "down"
+    assert saved[3]["to_target"] == "the Trash"
+    assert saved[3]["to_segment_ids"] == [1]
+    assert saved[3]["to_targets"] == [{"id": 1, "kind": "Title", "box": {"left": 0, "top": 0, "width": 100, "height": 20}}]
+
+
+def test_extra_fields_are_cleared_for_marks_that_do_not_use_them(tmp_path):
+    manifest = _folder(tmp_path)
+    steps = [_mark_step("highlight", label="Hi", keys=["Ctrl"], scroll="up", to_target="x", to_segment_ids=[1])]
+    planner, _models = _planner(_answer(steps))
+
+    planner.plan(_selection(manifest))
+
+    step = json.loads((tmp_path / PLAN_NAME).read_text(encoding="utf-8"))["steps"][0]
+    assert (step["label"], step["keys"], step["scroll"], step["to_target"], step["to_targets"]) == ("", [], "", "", [])
+
+
+def test_an_unknown_scroll_direction_is_dropped(tmp_path):
+    manifest = _folder(tmp_path)
+    planner, _models = _planner(_answer([_mark_step("scroll_hint", scroll="sideways")]))
+
+    planner.plan(_selection(manifest))
+
+    assert json.loads((tmp_path / PLAN_NAME).read_text(encoding="utf-8"))["steps"][0]["scroll"] == ""
+
+
+def test_a_plan_without_the_extra_fields_still_works(tmp_path):
+    manifest = _folder(tmp_path)
+    planner, _models = _planner(_answer([_step(action="spotlight")]))
+
+    planner.plan(_selection(manifest))
+
+    step = json.loads((tmp_path / PLAN_NAME).read_text(encoding="utf-8"))["steps"][0]
+    assert step["visual_action"] == "spotlight"
+    assert step["label"] == "" and step["keys"] == []
