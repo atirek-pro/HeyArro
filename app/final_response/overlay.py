@@ -17,6 +17,8 @@ from PySide6.QtWidgets import QWidget
 
 from app import config
 from app.final_response.marks import ACCENT, MarkContext, paint_mark  # noqa: F401  (ACCENT re-exported)
+from app.final_response.placement import CalmMap, find_spot
+from app.final_response.writing import build_writing, paint_writing, warm_up
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,9 @@ REVEAL_MS = 550
 PULSE_MS = 33
 # Screenshot pixels kept around a target in the magnifier's zoomed view.
 ZOOM_PADDING = 12
+# The status pill's zone at the top centre (logical pixels), kept free of writing.
+INDICATOR_HALF_WIDTH = 170
+INDICATOR_HEIGHT = 120
 
 
 def scale_for(screenshot_size, screen_size):
@@ -87,6 +92,18 @@ class ScreenOverlay(QWidget):
         self._mark = None
         self._progress = 0.0
         self._phase = 0.0
+        # The handwriting layer: (layout, board rect, element rect or None), drawn above the mark.
+        self._writing = None
+        self._write_progress = 0.0
+        self._shot_size = None
+        self._calm = None
+        self._calm_ready = False
+
+        self._write = QVariantAnimation(self)
+        self._write.setStartValue(0.0)
+        self._write.setEndValue(1.0)
+        self._write.valueChanged.connect(self._on_write)
+        warm_up()
 
         self._reveal = QVariantAnimation(self)
         self._reveal.setDuration(REVEAL_MS)
@@ -108,6 +125,10 @@ class ScreenOverlay(QWidget):
         """
         self._screenshot_path = screenshot_path
         self._screenshot = None
+        self._shot_size = tuple(screenshot_size)
+        self._calm = None
+        self._calm_ready = False
+        self._clear_writing()
         screen = target_screen(screenshot_size, self._monitor_index)
         if screen is None:
             logger.warning("[Overlay] marks are not drawn when every monitor is captured at once")
@@ -162,7 +183,51 @@ class ScreenOverlay(QWidget):
         ).intersected(self._screenshot.rect())
         return self._screenshot.copy(area) if not area.isEmpty() else None
 
+    def show_writing(self, lines, kind="note", box=None):
+        """Write ``lines`` on a glass board in calm space beside ``box`` (or anywhere calm).
+
+        The board replaces any earlier one and stays until the next writing or ``clear``.
+        """
+        if self._scale is None or not lines:
+            return
+        layout = build_writing(lines, kind)
+        if not layout.lines:
+            return
+        sx, sy = self._scale
+        bounds = self._shot_size or (self.width() / sx, self.height() / sy)
+        size = (layout.width / sx, layout.height / sy)
+        spot = find_spot(size, bounds, target=box, avoid=[self._indicator_zone()], calm=self._calm_map())
+        board = map_box({"left": spot[0], "top": spot[1], "width": spot[2], "height": spot[3]}, self._scale)
+        link = map_box(box, self._scale) if box else None
+        self._writing = (layout, board, link)
+        self._write.stop()
+        self._write.setDuration(layout.write_ms())
+        self._write_progress = 0.0
+        if not self.isVisible():
+            self.show()
+            self.raise_()
+        self._write.start()
+        logger.info("[Overlay] writing %s line(s) (%s) at %s", len(layout.lines), layout.kind, [round(v) for v in spot])
+
+    def _indicator_zone(self):
+        """The status pill's area at the top centre, in screenshot pixels, kept free of writing."""
+        sx, sy = self._scale
+        width = self._shot_size[0] if self._shot_size else self.width() / sx
+        return (width / 2 - INDICATOR_HALF_WIDTH / sx, 0, 2 * INDICATOR_HALF_WIDTH / sx, INDICATOR_HEIGHT / sy)
+
+    def _calm_map(self):
+        if not self._calm_ready:
+            self._calm_ready = True
+            self._calm = CalmMap.from_file(self._screenshot_path) if self._screenshot_path else None
+        return self._calm
+
+    def _clear_writing(self):
+        self._writing = None
+        self._write.stop()
+        self._write_progress = 0.0
+
     def clear(self):
+        self._clear_writing()
         self._set_mark(None)
         self.hide()
 
@@ -182,6 +247,10 @@ class ScreenOverlay(QWidget):
         self._reveal.start()
         self._pulse.start()
 
+    def _on_write(self, value):
+        self._write_progress = float(value)
+        self.update()
+
     def _on_reveal(self, value):
         self._progress = float(value)
         self.update()
@@ -193,14 +262,18 @@ class ScreenOverlay(QWidget):
     # --- painting -----------------------------------------------------------
 
     def paintEvent(self, event):
-        if self._mark is None:
+        if self._mark is None and self._writing is None:
             return
-        action, rect, centre, context = self._mark
-        context.canvas = QRectF(0, 0, self.width(), self.height())
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
         try:
-            paint_mark(painter, action, rect, centre, self._progress, self._phase, context)
+            if self._mark is not None:
+                action, rect, centre, context = self._mark
+                context.canvas = QRectF(0, 0, self.width(), self.height())
+                paint_mark(painter, action, rect, centre, self._progress, self._phase, context)
+            if self._writing is not None:
+                layout, board, link = self._writing
+                paint_writing(painter, layout, board, link, self._write_progress)
         finally:
             painter.end()

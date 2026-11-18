@@ -27,7 +27,10 @@ from app.planner.prompts import system_instruction
 from app.planner.provider import (
     MAX_KEYS,
     MAX_LABEL_CHARS,
+    MAX_WRITE_CHARS,
+    MAX_WRITE_LINES,
     SCROLL_DIRECTIONS,
+    WRITE_KINDS,
     PlanResult,
     ResponsePlanner,
     ResponsePlanningError,
@@ -54,6 +57,9 @@ class _Step(BaseModel):
     scroll: str = ""
     to_target: str = ""
     to_segment_ids: list[int] = []
+    # Handwriting added to the screen with this step; [] when it writes nothing.
+    write: list[str] = []
+    write_kind: str = ""
 
 
 class _Plan(BaseModel):
@@ -129,6 +135,8 @@ class GeminiResponsePlanner(ResponsePlanner):
                 step["visual_action"],
                 step["segment_ids"],
             )
+            if step["write"]:
+                logger.info("[Plan] step %s writes (%s): %s", step["order"], step["write_kind"], " | ".join(step["write"]))
         logger.info("[Plan] %s step(s) in %.2fs -> %s", len(document["steps"]), seconds, path)
         return PlanResult(
             plan_path=str(path),
@@ -279,6 +287,18 @@ class GeminiResponsePlanner(ResponsePlanner):
             "to_targets": resolved(to_ids),
         }
 
+    @staticmethod
+    def _write_fields(order, step):
+        """The handwriting of a step, cleaned: a few short lines and a known kind, or nothing."""
+        lines = [" ".join(line.split()) for line in step.write if line and line.strip()]
+        if len(lines) > MAX_WRITE_LINES:
+            logger.warning("[Plan] step %s writes %s lines; keeping %s", order, len(lines), MAX_WRITE_LINES)
+        lines = [line[:MAX_WRITE_CHARS] for line in lines[:MAX_WRITE_LINES]]
+        if not lines:
+            return {"write": [], "write_kind": ""}
+        kind = step.write_kind.strip().lower()
+        return {"write": lines, "write_kind": kind if kind in WRITE_KINDS else "note"}
+
     def _document(self, plan, manifest, segments, size, category, seconds):
         boxes = {segment["id"]: segment for segment in segments}
 
@@ -310,6 +330,7 @@ class GeminiResponsePlanner(ResponsePlanner):
                 "targets": resolved(ids),
             }
             entry.update(self._mark_fields(order, step, known_ids, resolved))
+            entry.update(self._write_fields(order, step))
             steps.append(entry)
 
         return {

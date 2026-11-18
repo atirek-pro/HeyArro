@@ -55,6 +55,9 @@ class FakeOverlay:
         self.marks.append((action, box, point))
         self.details = getattr(self, "details", []) + [details]
 
+    def show_writing(self, lines, kind="note", box=None):
+        self.writings = getattr(self, "writings", []) + [(list(lines), kind, box)]
+
     def clear(self):
         self.cleared += 1
 
@@ -813,3 +816,153 @@ def test_a_failed_response_does_not_present_and_ends_idle(tmp_path):
 
     assert presenter.presented == []
     assert statuses[-1] is AssistantStatus.IDLE
+
+
+# --- handwriting on the screen -----------------------------------------------------------
+
+
+def test_formula_and_plain_lines_become_shapes():
+    from app.final_response.writing import FORMULA_SIZE, NOTE_SIZE, build_writing
+
+    layout = build_writing(["speed = $\\frac{distance}{time}$", "plain words"], "formula")
+
+    assert len(layout.lines) == 2
+    assert all(not path.isEmpty() and width > 20 for path, width, _ in layout.lines)
+    fraction_height = layout.lines[0][2]
+    assert fraction_height > FORMULA_SIZE  # a fraction is taller than one line of text
+    assert layout.width > layout.lines[0][1] and layout.height > fraction_height
+    assert NOTE_SIZE < FORMULA_SIZE
+
+
+def test_a_formula_that_cannot_be_parsed_is_written_as_text():
+    from app.final_response.writing import build_writing
+
+    layout = build_writing(["broken $\\frac{a$ here"], "formula")
+
+    assert len(layout.lines) == 1 and not layout.lines[0][0].isEmpty()
+    assert layout.text_length == len("broken \\frac{a here")
+
+
+def test_writing_takes_about_handwriting_time():
+    from app.final_response.writing import MAX_WRITE_MS, MIN_WRITE_MS, build_writing
+
+    assert build_writing(["Hi"]).write_ms() == MIN_WRITE_MS
+    assert build_writing(["x" * 40, "y" * 40, "z" * 40]).write_ms() == MAX_WRITE_MS
+    assert MIN_WRITE_MS < build_writing(["a short note to read"]).write_ms() < MAX_WRITE_MS
+
+
+def test_empty_lines_write_nothing():
+    from app.final_response.writing import build_writing
+
+    assert build_writing(["", "   "]).lines == []
+
+
+@pytest.mark.parametrize("progress", [0.0, 0.5, 1.0])
+def test_the_board_paints_while_being_written(progress):
+    from PySide6.QtGui import QPainter
+
+    from app.final_response.writing import build_writing, paint_writing
+
+    layout = build_writing(["$a^2 + b^2 = c^2$", "the key idea"], "formula")
+    image = QImage(800, 600, QImage.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    painter = QPainter(image)
+    paint_writing(painter, layout, QRectF(300, 200, layout.width, layout.height), QRectF(100, 250, 80, 30), progress)
+    painter.end()
+
+    inked = any(image.pixelColor(x, y).alpha() > 0 for x in range(300, 800, 6) for y in range(200, 400, 6))
+    assert inked == (progress > 0)
+
+
+def _busy_left_image(width=800, height=600):
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    for y in range(0, height, 6):  # dense lines on the left half only
+        draw.line([(0, y), (width // 2, y)], fill="black")
+    return image
+
+
+def test_the_calm_map_tells_busy_from_empty_space():
+    from app.final_response.placement import CalmMap
+
+    calm = CalmMap(_busy_left_image())
+
+    assert calm.busyness((40, 40, 200, 200)) > 20
+    assert calm.busyness((500, 40, 200, 200)) < 1
+
+
+def test_the_board_goes_in_calm_space_beside_the_element_and_never_on_it():
+    from app.final_response.placement import CalmMap, _overlaps, find_spot
+
+    calm = CalmMap(_busy_left_image())
+    target = {"left": 330, "top": 250, "width": 60, "height": 30}
+
+    spot = find_spot((200, 100), (800, 600), target=target, calm=calm)
+
+    assert spot[0] >= 400  # the calm right-hand side
+    assert not _overlaps(spot, (330, 250, 60, 30))
+    assert 0 <= spot[0] and spot[0] + spot[2] <= 800 and 0 <= spot[1] and spot[1] + spot[3] <= 600
+
+
+def test_without_an_element_the_board_goes_to_the_calmest_area_and_avoids_the_pill():
+    from app.final_response.placement import CalmMap, _overlaps, find_spot
+
+    calm = CalmMap(_busy_left_image())
+    pill = (230, 0, 340, 120)
+
+    spot = find_spot((200, 100), (800, 600), avoid=[pill], calm=calm)
+
+    assert spot[0] >= 400 and not _overlaps(spot, pill)
+
+
+def test_a_board_that_cannot_fit_still_stays_on_screen():
+    from app.final_response.placement import find_spot
+
+    spot = find_spot((780, 590), (800, 600), target={"left": 10, "top": 10, "width": 50, "height": 50})
+
+    assert 0 <= spot[0] and 0 <= spot[1]
+
+
+def test_the_overlay_writes_on_a_board_and_clears_it(tmp_path):
+    screenshot = tmp_path / "screenshot.png"
+    _busy_left_image(1280, 720).save(screenshot)
+    overlay = ScreenOverlay(monitor_index=1)
+    overlay.resize(1280, 720)
+    overlay._scale = (1.0, 1.0)
+    overlay._shot_size = (1280, 720)
+    overlay._screenshot_path = str(screenshot)
+
+    overlay.show_writing(["$x^2$ grows fast"], "formula", MARK_BOX)
+
+    layout, board, link = overlay._writing
+    assert layout.kind == "formula" and link == QRectF(300, 250, 120, 40)
+    assert board.left() >= 640  # placed on the calm half
+    overlay._write.stop()
+    overlay._write_progress = 1.0
+    image = QImage(1280, 720, QImage.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    overlay.render(image)
+    assert any(image.pixelColor(x, y).alpha() > 0 for x in range(640, 1280, 6) for y in range(0, 720, 6))
+
+    overlay.clear()
+    assert overlay._writing is None
+
+
+def test_the_presenter_writes_once_per_step_and_keeps_marks(tmp_path):
+    sentences = [
+        _sentence(1, "Here is the search box.", step=1, action="circle"),
+        _sentence(2, "Speed is distance over time.", step=2, action="none", box=None),
+        _sentence(3, "So it is sixty.", step=2, action="none", box=None),
+    ]
+    sentences[1]["details"] = {"write": ["speed = $\\frac{d}{t}$"], "write_kind": "formula"}
+    sentences[2]["details"] = {"write": ["speed = $\\frac{d}{t}$"], "write_kind": "formula"}
+    overlay = FakeOverlay()
+    presenter, _statuses, finished = _presenter(overlay, FakeSpeech())
+
+    presenter.present(_response_file(tmp_path, sentences))
+
+    assert overlay.writings == [(["speed = $\\frac{d}{t}$"], "formula", None)]
+    assert [mark[0] for mark in overlay.marks] == ["circle", "none", "none"]
+    assert overlay.cleared == 1 and finished == [True]

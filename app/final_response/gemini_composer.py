@@ -150,7 +150,7 @@ class GeminiResponseComposer(ResponseComposer):
                     "key_points": step.get("key_points", []),
                     **{
                         field: step[field]
-                        for field in ("label", "keys", "scroll", "to_target")
+                        for field in ("label", "keys", "scroll", "to_target", "write")
                         if step.get(field)
                     },
                 }
@@ -236,6 +236,11 @@ class GeminiResponseComposer(ResponseComposer):
             details = _mark_details(step, pointer) if has_pointer else None
             if has_pointer:
                 action = _usable_action(action, details)
+            # Handwriting belongs to the step, so it is kept even when the step has no mark.
+            if step is not None and step.get("write"):
+                details = dict(details or {})
+                details["write"] = list(step["write"])
+                details["write_kind"] = step.get("write_kind") or "note"
             sentences.append(
                 {
                     "index": len(sentences) + 1,

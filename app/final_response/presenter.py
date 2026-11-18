@@ -61,6 +61,7 @@ class ResponsePresenter(QObject):
         self._sentences = []
         self._index = 0
         self._drawing = False
+        self._written_step = None
         self._workers = set()
 
     def present(self, response: FinalResponseResult):
@@ -78,6 +79,7 @@ class ResponsePresenter(QObject):
 
         self._sentences = sentences
         self._index = 0
+        self._written_step = None
         self._drawing = bool(
             self._overlay is not None
             and size.get("width")
@@ -133,6 +135,7 @@ class ResponsePresenter(QObject):
             self._overlay.show_mark(
                 sentence.get("visual_action"), pointer.get("box"), pointer.get("point"), sentence.get("details")
             )
+            self._write_for(sentence, pointer)
         self.status_changed.emit(AssistantStatus.SPEAKING)
 
         text = sentence.get("text", "")
@@ -146,6 +149,19 @@ class ResponsePresenter(QObject):
         worker.signals.finished.connect(lambda: self._on_spoken(worker))
         worker.signals.failed.connect(lambda message: self._on_speech_failed(worker, text, message))
         self._thread_pool.start(worker)
+
+    def _write_for(self, sentence, pointer):
+        """Write the step's lines on the screen, once per step, as its first sentence starts."""
+        details = sentence.get("details") or {}
+        lines = details.get("write")
+        step = sentence.get("step")
+        if not lines or step == self._written_step:
+            return
+        self._written_step = step
+        try:
+            self._overlay.show_writing(lines, details.get("write_kind") or "note", pointer.get("box"))
+        except Exception:
+            logger.warning("[Presenting] could not write on the screen", exc_info=True)
 
     def _speech_ready(self, text):
         is_ready = getattr(self._speech, "is_ready", None)

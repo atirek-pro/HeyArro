@@ -245,6 +245,25 @@ get is drawn as a simpler one: a `connector` without its second element becomes 
 a `callout` or `key_badge` without text becomes a `highlight`, a `scroll_hint` without a
 direction becomes a `beacon`.
 
+**Handwriting.** Besides its mark, a step can make Hey Arro *write* on the screen: something
+that is not on the screen but makes the answer clearer, such as a formula, a worked
+calculation with the screen's numbers, a short definition, the key takeaway or a quote. The
+planner adds up to three short lines (`write`, with `write_kind`: formula, note, quote or
+steps), usually on no more than one or two steps of an answer.
+
+- It is written on a small dark glass board, in **Segoe Print** (the handwriting font that
+  ships with Windows and covers maths symbols), as if by a pen: each line appears left to
+  right behind a moving nib, at about handwriting speed, while the sentence is spoken.
+- Formulas between `$…$` (`\frac{a}{b}`, `x^2`, `\sqrt{x}`, `\pi`, `\sum`) are laid out by
+  matplotlib's mathtext in the same font, with real fraction bars and powers; no LaTeX is
+  needed. A formula that cannot be read is written as plain text.
+- The board goes in the calmest empty space beside its element, measured from the
+  screenshot, never on the element or the status indicator, with a dashed line to the
+  element. Without an element it goes in the calmest area of the screen.
+- It stays up until the next step that writes, so later sentences can refer to it, and is
+  cleared with the marks when the answer ends. The spoken answer refers to it ("as I've
+  written here") and says formulas in words.
+
 When the last sentence is done, the screen is cleared, the indicator fades out and Hey
 Arro is ready for the next question.
 
@@ -563,7 +582,8 @@ app/
 │                        Gemini segment selection + categorisation
 ├── planner/             per-category prompts + Gemini response planner
 ├── grounding/           Gemini target -> pixel-box grounding
-├── final_response/      Gemini composer, Kokoro + Windows speech, on-screen overlay + marks, presenter
+├── final_response/      Gemini composer, Kokoro + Windows speech, on-screen overlay, marks,
+│                        handwriting board + its placement, presenter
 ├── llm/                 earlier answer stage (kept, not wired into the flow)
 ├── ui/                  tray icon + glass status indicator
 └── assets/              app icon (sunset-tile.ico) used by the tray
@@ -605,7 +625,7 @@ sample_refinement.py     stand-alone script that draws the segments of one scree
 heyarro-env\Scripts\python.exe -m pytest tests -q --ignore=tests/test_llm_providers.py
 ```
 
-The suite (332 tests) replaces the microphone, Whisper, the screen, `unstructured`,
+The suite (350 tests) replaces the microphone, Whisper, the screen, `unstructured`,
 Gemini, the voice and the thread pool with doubles. It needs no API key, hardware or
 model download, and nothing is spoken or shown while it runs.
 
@@ -695,6 +715,8 @@ cache on its first sentence.
 - All sentences of one plan step share that step's mark, and one mark is on screen at a
   time (a `connector` is the only mark that touches two elements).
 - No marks are drawn when `SCREENSHOT_MONITOR=0` (all monitors combined).
+- Handwriting is revealed left to right rather than drawn stroke by stroke, and only one
+  board is on screen at a time.
 - A `fallback` question ends without a spoken reply.
 
 ---

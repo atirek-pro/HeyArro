@@ -534,3 +534,30 @@ def test_the_composer_sees_labels_and_keys_in_the_plan(tmp_path):
 
     prompt = models.calls[0]["contents"].parts[1].text
     assert '"keys":["Ctrl","F"]' in prompt
+
+
+# --- handwriting ---------------------------------------------------------------------
+
+
+def test_written_lines_reach_the_sentence_details_even_without_a_mark(tmp_path):
+    grounding = _folder(tmp_path)
+    plan = json.loads((tmp_path / PLAN_NAME).read_text(encoding="utf-8"))
+    plan["steps"][2].update({"write": ["$a^2 + b^2 = c^2$"], "write_kind": "formula"})  # step 3 has no mark
+    plan["steps"][0].update({"write": ["Search: Ctrl + K"], "write_kind": "note"})
+    (tmp_path / PLAN_NAME).write_text(json.dumps(plan), encoding="utf-8")
+    composer, models = _composer(_answer())
+
+    composer.compose(grounding)
+
+    sentences = _response(tmp_path)["sentences"]
+    assert sentences[4]["pointer"] is None
+    assert sentences[4]["details"] == {"write": ["$a^2 + b^2 = c^2$"], "write_kind": "formula"}
+    assert sentences[1]["details"]["write"] == ["Search: Ctrl + K"]
+    assert sentences[1]["details"]["number"] == 1  # the mark details are still there
+    assert sentences[3]["details"].get("write") is None
+    assert '"write":["Search: Ctrl + K"]' in models.calls[0]["contents"].parts[1].text
+
+
+def test_the_brief_says_how_to_speak_about_the_writing():
+    assert "as I've written here" in BASE_INSTRUCTION
+    assert "never read out TeX" in BASE_INSTRUCTION

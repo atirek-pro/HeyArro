@@ -57,6 +57,11 @@ SCROLL_DIRECTIONS = ("up", "down")
 MAX_LABEL_CHARS = 40
 MAX_KEYS = 4
 
+# Handwriting a step may add to the screen (a formula, a worked step, a note...).
+WRITE_KINDS = ("formula", "note", "quote", "steps")
+MAX_WRITE_LINES = 3
+MAX_WRITE_CHARS = 40
+
 
 @dataclass(frozen=True)
 class PlanResult:
